@@ -67,7 +67,13 @@ function speak(text: string) {
 }
 
 export default function Chat() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+  /**
+   * Vercel-friendly default:
+   * - If NEXT_PUBLIC_API_BASE_URL is NOT set, we use same-origin requests ("/api/..."),
+   *   which works great with Vercel rewrites/proxies.
+   * - For local dev with a separate backend, set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+   */
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
   const [messages, setMessages] = useState<Message[]>([
     {
