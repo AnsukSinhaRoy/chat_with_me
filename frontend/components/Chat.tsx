@@ -208,7 +208,8 @@ export default function Chat() {
     if (!text || busy) return;
     setInput("");
 
-    const next = [...messagesRef.current, { role: "user", content: text, ts: hhmm() }];
+    const userMsg: Message = { role: "user", content: text, ts: hhmm() };
+    const next = [...messagesRef.current, userMsg];
     setMessages(next);
     await callChat(next);
   }
@@ -467,10 +468,10 @@ export default function Chat() {
         const srInterim = transcriptRef.current.interim.trim();
         cleanupRecording();
 
-        // Prefer Web Speech API transcript if available (usually clearer + already text)
         const preferredText = (srText || srInterim).trim();
         if (preferredText) {
-          const next = [...messagesRef.current, { role: "user", content: preferredText, ts: hhmm() }];
+          const userMsg: Message = { role: "user", content: preferredText, ts: hhmm() };
+          const next = [...messagesRef.current, userMsg];
           setMessages(next);
           await callChat(next);
           return;
@@ -484,10 +485,10 @@ export default function Chat() {
         try {
           const tr = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
           if (!tr.ok) throw new Error(await tr.text());
-          const data = (await tr.json()) as { text: string };
-
+          const data = await tr.json();
           const userText = (data.text || "").trim() || "(Audio unclear)";
-          const next = [...messagesRef.current, { role: "user", content: userText, ts: hhmm() }];
+          const userMsg: Message = { role: "user", content: userText, ts: hhmm() };
+          const next = [...messagesRef.current, userMsg];
           setMessages(next);
           await callChat(next);
         } catch {
