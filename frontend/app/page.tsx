@@ -3,16 +3,26 @@ import Chat from "../components/Chat";
 
 export default function Page() {
   return (
-    <div className="container">
-      <div className="header-card">
-        <div className="header-left">
-          <h3>🎙️ Talk to Ansuk</h3>
-          <p>Applied ML • Deep RL • Reproducible experiments • <span style={{opacity:0.7}}>Tip: Chrome works best for voice.</span></p>
+    <main className="app">
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div className="brand">
+            <div className="brand-dot" aria-hidden="true" />
+            <div>
+              <div className="brand-title">Talk to Ansuk</div>
+              <div className="brand-subtitle">
+                Applied ML • Deep RL • Reproducible experiments
+                <span style={{ opacity: 0.7 }}> • Tip: Chrome works best for voice.</span>
+              </div>
+            </div>
+          </div>
+          <div className="status-pill">● Online</div>
         </div>
-        <div className="badge">● Online</div>
-      </div>
+      </header>
 
-      <Chat />
-    </div>
+      <div className="content">
+        <Chat />
+      </div>
+    </main>
   );
 }

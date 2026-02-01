@@ -28,17 +28,28 @@ function hhmm() {
 function pickVoice(): SpeechSynthesisVoice | null {
   const voices = window.speechSynthesis.getVoices() || [];
   const maleHints = [
-    "male","david","mark","alex","daniel","george","fred","roger","thomas","john",
-    "microsoft david","google uk english male","google us english"
+    "male",
+    "david",
+    "mark",
+    "alex",
+    "daniel",
+    "george",
+    "fred",
+    "roger",
+    "thomas",
+    "john",
+    "microsoft david",
+    "google uk english male",
+    "google us english",
   ];
-  const en = voices.filter(v => /^en/i.test(v.lang));
+  const en = voices.filter((v) => /^en/i.test(v.lang));
   const pool = en.length ? en : voices;
   if (!pool.length) return null;
 
-  const found = pool.find(v => {
+  const found = pool.find((v) => {
     const name = (v.name || "").toLowerCase();
     const uri = (v.voiceURI || "").toLowerCase();
-    return maleHints.some(h => name.includes(h) || uri.includes(h));
+    return maleHints.some((h) => name.includes(h) || uri.includes(h));
   });
   return found || pool[0];
 }
@@ -59,7 +70,12 @@ export default function Chat() {
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
   const [messages, setMessages] = useState<Message[]>([
-    { role: "assistant", content: "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever. 🎙️", ts: hhmm() }
+    {
+      role: "assistant",
+      content:
+        "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever.",
+      ts: hhmm(),
+    },
   ]);
 
   const [input, setInput] = useState("");
@@ -73,10 +89,29 @@ export default function Chat() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
 
+  // Helps async callbacks (like MediaRecorder.onstop) always use the latest messages.
+  const messagesRef = useRef<Message[]>(messages);
+
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const hasUserMessages = useMemo(
+    () => messages.some((m) => m.role === "user"),
+    [messages]
+  );
+
   useEffect(() => {
     // ensure voices populate
     window.speechSynthesis?.getVoices?.();
   }, []);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    if (!hasUserMessages) return;
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, hasUserMessages]);
 
   async function callChat(nextMessages: Message[]) {
     setBusy(true);
@@ -85,19 +120,25 @@ export default function Chat() {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, app_mode: process.env.NEXT_PUBLIC_APP_MODE || "quota_saver" })
+        body: JSON.stringify({
+          messages: nextMessages,
+          app_mode: process.env.NEXT_PUBLIC_APP_MODE || "quota_saver",
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data: ChatResponse = await res.json();
 
       const botMsg: Message = { role: "assistant", content: data.reply, ts: hhmm() };
-      setMessages(prev => [...prev, botMsg]);
+      setMessages((prev) => [...prev, botMsg]);
       setDebug(data);
 
       // Speak after a user-initiated action (send/stop recording) to avoid autoplay blocks
       speak(data.reply);
     } catch (e: any) {
-      setMessages(prev => [...prev, { role: "assistant", content: "I hit a temporary limit. Try again in a moment.", ts: hhmm() }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "I hit a temporary limit. Try again in a moment.", ts: hhmm() },
+      ]);
     } finally {
       setBusy(false);
     }
@@ -108,14 +149,21 @@ export default function Chat() {
     if (!text || busy) return;
     setInput("");
 
-    const next = [...messages, { role: "user", content: text, ts: hhmm() }];
+    const next = [...messagesRef.current, { role: "user", content: text, ts: hhmm() }];
     setMessages(next);
     await callChat(next);
   }
 
   function newChat() {
-    setMessages([{ role: "assistant", content: "Fresh slate. Hit me with your best interview question. 😄", ts: hhmm() }]);
+    setMessages([
+      {
+        role: "assistant",
+        content: "Fresh slate. Hit me with your best interview question.",
+        ts: hhmm(),
+      },
+    ]);
     setDebug(null);
+    setDebugOpen(false);
   }
 
   function exportJSON() {
@@ -126,6 +174,13 @@ export default function Chat() {
     a.download = "chat.json";
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function fillPrompt(text: string) {
+    setInput(text);
+    // focus the input for faster iteration
+    const el = document.getElementById("prompt-input") as HTMLInputElement | null;
+    el?.focus();
   }
 
   async function toggleRecording() {
@@ -142,7 +197,7 @@ export default function Chat() {
       };
 
       mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
+        stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
 
         // upload to backend for transcription
@@ -153,14 +208,17 @@ export default function Chat() {
         try {
           const tr = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
           if (!tr.ok) throw new Error(await tr.text());
-          const data = await tr.json() as { text: string };
+          const data = (await tr.json()) as { text: string };
 
           const userText = (data.text || "").trim() || "(Audio unclear)";
-          const next = [...messages, { role: "user", content: userText, ts: hhmm() }];
+          const next = [...messagesRef.current, { role: "user", content: userText, ts: hhmm() }];
           setMessages(next);
           await callChat(next);
         } catch {
-          setMessages(prev => [...prev, { role: "assistant", content: "Audio upload/transcribe failed — try again.", ts: hhmm() }]);
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: "Audio upload/transcribe failed — try again.", ts: hhmm() },
+          ]);
         } finally {
           setBusy(false);
         }
@@ -174,60 +232,174 @@ export default function Chat() {
     }
   }
 
+  const micLabel = recording ? "Stop recording" : "Start voice";
+  const sendLabel = "Send";
+
   return (
-    <>
-      <div className="toolbar">
-        <div className={"mic" + (recording ? " rec" : "")}>
-          <button onClick={toggleRecording} style={{width:56, height:56, borderRadius:999}}>
-            {recording ? "■" : "🎤"}
-          </button>
-        </div>
-        <button onClick={newChat}>New Chat</button>
-        <button onClick={exportJSON}>Export JSON</button>
-        <button onClick={() => setDebugOpen(v => !v)} style={{marginLeft:"auto"}}>
-          Debug
-        </button>
-      </div>
-
-      <div className="hr" />
-
-      {debugOpen && (
-        <div style={{padding:"12px 14px", border:"1px solid rgba(255,255,255,0.1)", borderRadius:12, background:"rgba(255,255,255,0.04)", marginBottom:14}}>
-          <div style={{fontSize:12, color:"rgba(255,255,255,0.7)"}}>
-            <div>APP_MODE: {process.env.NEXT_PUBLIC_APP_MODE || "quota_saver"}</div>
-            <div>Last used chat model: {debug?.used_model || "-"}</div>
-            <div>Last tried model: {debug?.last_tried_model || "-"}</div>
-            {debug?.model_errors?.length ? (
-              <pre style={{whiteSpace:"pre-wrap", marginTop:8, fontSize:12, color:"rgba(255,255,255,0.7)"}}>
-                {debug.model_errors.join("\n")}
-              </pre>
-            ) : null}
+    <div className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"}`}>
+      {hasUserMessages ? (
+        <>
+          <div className="chat-actions">
+            <button onClick={newChat} className="ghost-btn">
+              New chat
+            </button>
+            <button onClick={exportJSON} className="ghost-btn">
+              Export
+            </button>
+            <button
+              onClick={() => setDebugOpen((v) => !v)}
+              className="ghost-btn"
+              style={{ marginLeft: "auto" }}
+            >
+              Debug
+            </button>
           </div>
-        </div>
+
+          {debugOpen && (
+            <div className="debug-panel">
+              <div className="debug-line">APP_MODE: {process.env.NEXT_PUBLIC_APP_MODE || "quota_saver"}</div>
+              <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
+              <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
+              {debug?.model_errors?.length ? (
+                <pre className="debug-pre">{debug.model_errors.join("\n")}</pre>
+              ) : null}
+            </div>
+          )}
+
+          <div className="chat-scroll">
+            <div className="chat">
+              {messages.map((m, idx) => (
+                <div key={idx} className={`bubble ${m.role === "user" ? "user" : "ai"}`}>
+                  {m.content}
+                  <div className="meta">{m.ts}</div>
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+          </div>
+
+          <div className="composer composer-fixed" aria-label="Message composer">
+            <div className={`composer-bar ${busy ? "is-busy" : ""}`}>
+              <input
+                id="prompt-input"
+                className="prompt-input"
+                type="text"
+                placeholder="Ask anything…"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") sendText();
+                }}
+                disabled={busy}
+                autoComplete="off"
+              />
+              <button
+                className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
+                onClick={toggleRecording}
+                aria-label={micLabel}
+                title={micLabel}
+                disabled={busy}
+              >
+                {recording ? "■" : "🎤"}
+              </button>
+              <button
+                className="icon-btn send-btn"
+                onClick={sendText}
+                aria-label={sendLabel}
+                title={sendLabel}
+                disabled={busy}
+              >
+                ➤
+              </button>
+            </div>
+            <div className="composer-hint">Enter to send • Mic for voice</div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="hero">
+            <div className="hero-copy">
+              <div className="hero-kicker">✨ Hi</div>
+              <h1 className="hero-title">Where should we start?</h1>
+              <p className="hero-subtitle">
+                Ask interview-style questions about projects, deep RL, strengths, growth areas — or just talk.
+              </p>
+            </div>
+
+            <div className="composer composer-hero" aria-label="Message composer">
+              <div className={`composer-bar ${busy ? "is-busy" : ""}`}>
+                <input
+                  id="prompt-input"
+                  className="prompt-input"
+                  type="text"
+                  placeholder="Ask anything…"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") sendText();
+                  }}
+                  disabled={busy}
+                  autoComplete="off"
+                />
+                <button
+                  className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
+                  onClick={toggleRecording}
+                  aria-label={micLabel}
+                  title={micLabel}
+                  disabled={busy}
+                >
+                  {recording ? "■" : "🎤"}
+                </button>
+                <button
+                  className="icon-btn send-btn"
+                  onClick={sendText}
+                  aria-label={sendLabel}
+                  title={sendLabel}
+                  disabled={busy}
+                >
+                  ➤
+                </button>
+              </div>
+            </div>
+
+            <div className="hero-chips" aria-label="Quick prompts">
+              <button className="chip" onClick={() => fillPrompt("Give me a quick overview of your strongest project.")}
+              >
+                Strongest project
+              </button>
+              <button className="chip" onClick={() => fillPrompt("Explain your RL work in 60 seconds, like an interview answer.")}
+              >
+                60-sec pitch
+              </button>
+              <button className="chip" onClick={() => fillPrompt("Ask me 5 tough interview questions for applied ML.")}
+              >
+                Tough questions
+              </button>
+              <button className="chip" onClick={() => fillPrompt("Let’s do a mock interview. Start with a question.")}
+              >
+                Mock interview
+              </button>
+            </div>
+          </div>
+
+          {/* Keep debug reachable even on the landing screen */}
+          <div className="landing-footer">
+            <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn">
+              Debug
+            </button>
+            {debugOpen && (
+              <div className="debug-panel" style={{ marginTop: 10 }}>
+                <div className="debug-line">APP_MODE: {process.env.NEXT_PUBLIC_APP_MODE || "quota_saver"}</div>
+                <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
+                <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
+                {debug?.model_errors?.length ? (
+                  <pre className="debug-pre">{debug.model_errors.join("\n")}</pre>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </>
       )}
-
-      <div className="chat">
-        {messages.map((m, idx) => (
-          <div key={idx} className={"bubble " + (m.role === "user" ? "user" : "ai")}>
-            {m.content}
-            <div className="meta">{m.ts}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="composer">
-        <div className="composer-inner">
-          <input
-            type="text"
-            placeholder="Type your message..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") sendText(); }}
-            disabled={busy}
-          />
-          <button onClick={sendText} disabled={busy}>Send</button>
-        </div>
-      </div>
-    </>
+    </div>
   );
 }
