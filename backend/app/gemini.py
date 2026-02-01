@@ -20,15 +20,16 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     app_mode = (app_mode or "quota_saver").lower()
     if app_mode == "quota_saver":
         return (
-                [
-                    "gemini-2.5-flash-lite",
-                    "gemini-2.5-flash",
-                    "gemini-2.0-flash",
-                ],
-                512,
-                1,
-                6,
-                )
+            [
+                "models/gemini-flash-lite-latest",
+                "models/gemini-2.0-flash-lite-001",
+                "models/gemini-2.0-flash",
+                "models/gemma-3-12b-it",
+            ],
+            512,  # max_output_tokens
+            1,    # max_hops
+            6,    # history_turns
+        )
     if app_mode == "quality":
         return (
             [

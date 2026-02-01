@@ -75,6 +75,17 @@ export default function Chat() {
    */
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
+  // --- app mode (quota_saver vs quality) ---
+  type AppMode = "quota_saver" | "quality";
+  const DEFAULT_MODE: AppMode =
+    ((process.env.NEXT_PUBLIC_APP_MODE as AppMode) || "quota_saver").toLowerCase() === "quality"
+      ? "quality"
+      : "quota_saver";
+
+  const [appMode, setAppMode] = useState<AppMode>(DEFAULT_MODE);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const modeMenuRef = useRef<HTMLDivElement | null>(null);
+
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -95,6 +106,17 @@ export default function Chat() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
 
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const vadRafRef = useRef<number | null>(null);
+  const maxRecTimerRef = useRef<number | null>(null);
+  const silenceSinceRef = useRef<number | null>(null);
+  const hadSpeechRef = useRef<boolean>(false);
+
+  // Web Speech API (Chrome) — used to auto-stop + produce a clearer transcript.
+  const recognitionRef = useRef<any>(null);
+  const transcriptRef = useRef<{ final: string; interim: string }>({ final: "", interim: "" });
+
   // Helps async callbacks (like MediaRecorder.onstop) always use the latest messages.
   const messagesRef = useRef<Message[]>(messages);
 
@@ -104,6 +126,37 @@ export default function Chat() {
     () => messages.some((m) => m.role === "user"),
     [messages]
   );
+
+  // Load persisted mode (so the dropdown selection sticks)
+  useEffect(() => {
+    try {
+      const saved = (window.localStorage.getItem("app_mode") || "").toLowerCase();
+      if (saved === "quality" || saved === "quota_saver") setAppMode(saved);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("app_mode", appMode);
+    } catch {
+      // ignore
+    }
+  }, [appMode]);
+
+  // Close the mode menu on outside click
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const el = modeMenuRef.current;
+      if (!el) return;
+      if (el.contains(e.target as Node)) return;
+      setModeMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [modeMenuOpen]);
 
   useEffect(() => {
     // ensure voices populate
@@ -128,7 +181,7 @@ export default function Chat() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: nextMessages,
-          app_mode: process.env.NEXT_PUBLIC_APP_MODE || "quota_saver",
+          app_mode: appMode,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -189,12 +242,217 @@ export default function Chat() {
     el?.focus();
   }
 
+  function modeLabel(m: AppMode) {
+    return m === "quality" ? "Quality" : "Quota saver";
+  }
+
+  function modeSubtitle(m: AppMode) {
+    return m === "quality" ? "Best answers" : "Answers quickly";
+  }
+
+  function setMode(m: AppMode) {
+    setAppMode(m);
+    setModeMenuOpen(false);
+  }
+
+  function cleanupRecording() {
+    if (vadRafRef.current) {
+      cancelAnimationFrame(vadRafRef.current);
+      vadRafRef.current = null;
+    }
+    if (maxRecTimerRef.current) {
+      window.clearTimeout(maxRecTimerRef.current);
+      maxRecTimerRef.current = null;
+    }
+    silenceSinceRef.current = null;
+    hadSpeechRef.current = false;
+
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    }
+    recognitionRef.current = null;
+    transcriptRef.current = { final: "", interim: "" };
+
+    try {
+      audioCtxRef.current?.close?.();
+    } catch {
+      // ignore
+    }
+    audioCtxRef.current = null;
+
+    try {
+      streamRef.current?.getTracks?.().forEach((t) => t.stop());
+    } catch {
+      // ignore
+    }
+    streamRef.current = null;
+  }
+
+  function stopRecording() {
+    if (!recording) return;
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // ignore
+    }
+    try {
+      const mr = mediaRecorderRef.current;
+      if (mr && mr.state === "recording") mr.stop();
+    } catch {
+      // ignore
+    }
+    setRecording(false);
+  }
+
+  function startSpeechRecognitionIfAvailable() {
+    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+
+    try {
+      const rec = new SR();
+      recognitionRef.current = rec;
+
+      // en-IN feels nicer for Indian English users; switch to en-US if you prefer.
+      rec.lang = "en-IN";
+      rec.interimResults = true;
+      rec.continuous = true;
+
+      transcriptRef.current = { final: "", interim: "" };
+
+      rec.onresult = (event: any) => {
+        let interim = "";
+        let final = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          const txt = (res[0]?.transcript || "").toString();
+          if (res.isFinal) final += txt;
+          else interim += txt;
+        }
+        transcriptRef.current.final = (transcriptRef.current.final + " " + final).trim();
+        transcriptRef.current.interim = interim.trim();
+      };
+
+      // Many Chrome builds fire onspeechend on pauses — we use it to auto-stop.
+      rec.onspeechend = () => {
+        // Only stop after we've heard *something*
+        if ((transcriptRef.current.final || transcriptRef.current.interim).trim()) {
+          stopRecording();
+        }
+      };
+
+      rec.onerror = () => {
+        // If speech recognition fails, we still have audio upload fallback.
+      };
+
+      rec.start();
+    } catch {
+      recognitionRef.current = null;
+    }
+  }
+
+  function startSilenceAutoStop(analyser: AnalyserNode) {
+    const data = new Uint8Array(analyser.fftSize);
+    let noiseFloor = 0.01; // dynamic baseline
+
+    const tick = () => {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / data.length);
+
+      // Adapt noise floor more when we haven't detected speech yet.
+      const alpha = hadSpeechRef.current ? 0.99 : 0.95;
+      noiseFloor = alpha * noiseFloor + (1 - alpha) * rms;
+
+      const threshold = Math.max(noiseFloor * 3.5, 0.012);
+      const now = Date.now();
+
+      if (rms > threshold) {
+        hadSpeechRef.current = true;
+        silenceSinceRef.current = null;
+      } else if (hadSpeechRef.current) {
+        if (silenceSinceRef.current == null) silenceSinceRef.current = now;
+        if (now - (silenceSinceRef.current || now) > 900) {
+          stopRecording();
+          return;
+        }
+      }
+
+      vadRafRef.current = requestAnimationFrame(tick);
+    };
+
+    vadRafRef.current = requestAnimationFrame(tick);
+  }
+
   async function toggleRecording() {
     if (busy) return;
 
     if (!recording) {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
+      // Reset transcript buffers for this take
+      transcriptRef.current = { final: "", interim: "" };
+
+      // Capture with better defaults (clearer audio in most setups)
+      const rawStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        } as any,
+      });
+      streamRef.current = rawStream;
+
+      // Optional light processing (compression + gain) BEFORE recording.
+      const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
+      const audioCtx: AudioContext | null = AC ? new AC() : null;
+      audioCtxRef.current = audioCtx;
+
+      let recordStream: MediaStream = rawStream;
+      if (audioCtx) {
+        const source = audioCtx.createMediaStreamSource(rawStream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+
+        const compressor = audioCtx.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-45, audioCtx.currentTime);
+        compressor.knee.setValueAtTime(30, audioCtx.currentTime);
+        compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
+        compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+        compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(1.18, audioCtx.currentTime);
+
+        const dest = audioCtx.createMediaStreamDestination();
+
+        source.connect(compressor);
+        compressor.connect(gain);
+        gain.connect(dest);
+
+        // analyser is for silence detection (auto-stop)
+        source.connect(analyser);
+        startSilenceAutoStop(analyser);
+
+        recordStream = dest.stream;
+      }
+
+      // Pick a good mime type when possible
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/ogg",
+      ];
+      const mimeType = mimeCandidates.find((t) => (window as any).MediaRecorder?.isTypeSupported?.(t));
+      const mr = mimeType
+        ? new MediaRecorder(recordStream, { mimeType, audioBitsPerSecond: 128000 })
+        : new MediaRecorder(recordStream, { audioBitsPerSecond: 128000 });
+
       mediaRecorderRef.current = mr;
       chunksRef.current = [];
 
@@ -203,8 +461,20 @@ export default function Chat() {
       };
 
       mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
+        // stop devices + timers + audio context
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
+        const srText = transcriptRef.current.final.trim();
+        const srInterim = transcriptRef.current.interim.trim();
+        cleanupRecording();
+
+        // Prefer Web Speech API transcript if available (usually clearer + already text)
+        const preferredText = (srText || srInterim).trim();
+        if (preferredText) {
+          const next = [...messagesRef.current, { role: "user", content: preferredText, ts: hhmm() }];
+          setMessages(next);
+          await callChat(next);
+          return;
+        }
 
         // upload to backend for transcription
         const form = new FormData();
@@ -230,11 +500,18 @@ export default function Chat() {
         }
       };
 
+      // Start browser speech recognition (if available) for auto-stop + cleaner text.
+      startSpeechRecognitionIfAvailable();
+
+      // Safety net: stop after 18s no matter what
+      maxRecTimerRef.current = window.setTimeout(() => {
+        stopRecording();
+      }, 18000);
+
       mr.start();
       setRecording(true);
     } else {
-      mediaRecorderRef.current?.stop();
-      setRecording(false);
+      stopRecording();
     }
   }
 
@@ -263,7 +540,7 @@ export default function Chat() {
 
           {debugOpen && (
             <div className="debug-panel">
-              <div className="debug-line">APP_MODE: {process.env.NEXT_PUBLIC_APP_MODE || "quota_saver"}</div>
+              <div className="debug-line">APP_MODE: {appMode}</div>
               <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
               <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
               {debug?.model_errors?.length ? (
@@ -272,15 +549,23 @@ export default function Chat() {
             </div>
           )}
 
-          <div className="chat-scroll">
-            <div className="chat">
-              {messages.map((m, idx) => (
-                <div key={idx} className={`bubble ${m.role === "user" ? "user" : "ai"}`}>
-                  {m.content}
-                  <div className="meta">{m.ts}</div>
-                </div>
-              ))}
-              <div ref={chatEndRef} />
+          {/*
+            Full-width scroll area so the scrollbar sits on the extreme right edge of the screen.
+            Inner wrapper keeps chat content centered.
+          */}
+          <div className="chat-scroll-outer">
+            <div className="chat-scroll-inner">
+              <div className="chat">
+                {messages.map((m, idx) => (
+                  <div key={idx} className={`bubble ${m.role === "user" ? "user" : "ai"}`}>
+                    {m.content}
+                    <div className="meta">{m.ts}</div>
+                  </div>
+                ))}
+                {/* Spacer ensures the last message never sits behind the fixed composer */}
+                <div className="chat-bottom-spacer" aria-hidden="true" />
+                <div ref={chatEndRef} />
+              </div>
             </div>
           </div>
 
@@ -299,6 +584,46 @@ export default function Chat() {
                 disabled={busy}
                 autoComplete="off"
               />
+
+              {/* Gemini-like mode dropdown */}
+              <div className="mode-wrap" ref={modeMenuRef}>
+                <button
+                  className="mode-pill"
+                  type="button"
+                  onClick={() => setModeMenuOpen((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={modeMenuOpen}
+                  title="Choose response mode"
+                >
+                  <span className="mode-pill-label">{modeLabel(appMode)}</span>
+                  <span className="mode-pill-chev" aria-hidden="true">
+                    ▾
+                  </span>
+                </button>
+                {modeMenuOpen && (
+                  <div className="mode-menu" role="menu" aria-label="Mode selection">
+                    <button className="mode-item" role="menuitem" onClick={() => setMode("quota_saver")}
+                      aria-checked={appMode === "quota_saver"}
+                    >
+                      <div className="mode-item-text">
+                        <div className="mode-item-title">Quota saver</div>
+                        <div className="mode-item-sub">Answers quickly</div>
+                      </div>
+                      {appMode === "quota_saver" ? <div className="mode-check">✓</div> : null}
+                    </button>
+                    <button className="mode-item" role="menuitem" onClick={() => setMode("quality")}
+                      aria-checked={appMode === "quality"}
+                    >
+                      <div className="mode-item-text">
+                        <div className="mode-item-title">Quality</div>
+                        <div className="mode-item-sub">Best answers</div>
+                      </div>
+                      {appMode === "quality" ? <div className="mode-check">✓</div> : null}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <button
                 className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
                 onClick={toggleRecording}
@@ -347,6 +672,46 @@ export default function Chat() {
                   disabled={busy}
                   autoComplete="off"
                 />
+
+                {/* Mode dropdown on landing too */}
+                <div className="mode-wrap" ref={modeMenuRef}>
+                  <button
+                    className="mode-pill"
+                    type="button"
+                    onClick={() => setModeMenuOpen((v) => !v)}
+                    aria-haspopup="menu"
+                    aria-expanded={modeMenuOpen}
+                    title="Choose response mode"
+                  >
+                    <span className="mode-pill-label">{modeLabel(appMode)}</span>
+                    <span className="mode-pill-chev" aria-hidden="true">
+                      ▾
+                    </span>
+                  </button>
+                  {modeMenuOpen && (
+                    <div className="mode-menu" role="menu" aria-label="Mode selection">
+                      <button className="mode-item" role="menuitem" onClick={() => setMode("quota_saver")}
+                        aria-checked={appMode === "quota_saver"}
+                      >
+                        <div className="mode-item-text">
+                          <div className="mode-item-title">Quota saver</div>
+                          <div className="mode-item-sub">Answers quickly</div>
+                        </div>
+                        {appMode === "quota_saver" ? <div className="mode-check">✓</div> : null}
+                      </button>
+                      <button className="mode-item" role="menuitem" onClick={() => setMode("quality")}
+                        aria-checked={appMode === "quality"}
+                      >
+                        <div className="mode-item-text">
+                          <div className="mode-item-title">Quality</div>
+                          <div className="mode-item-sub">Best answers</div>
+                        </div>
+                        {appMode === "quality" ? <div className="mode-check">✓</div> : null}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <button
                   className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
                   onClick={toggleRecording}
@@ -369,21 +734,21 @@ export default function Chat() {
             </div>
 
             <div className="hero-chips" aria-label="Quick prompts">
-              <button className="chip" onClick={() => fillPrompt("Give me a quick overview of your strongest project.")}
+              <button className="chip" onClick={() => fillPrompt("What should we know about your life story in a few sentences?")}
               >
-                Strongest project
+                What should we know about your life story in a few sentences?
               </button>
-              <button className="chip" onClick={() => fillPrompt("Explain your RL work in 60 seconds, like an interview answer.")}
+              <button className="chip" onClick={() => fillPrompt("What’s your #1 superpower? ")}
               >
-                60-sec pitch
+                What’s your #1 superpower?
               </button>
-              <button className="chip" onClick={() => fillPrompt("Ask me 5 tough interview questions for applied ML.")}
+              <button className="chip" onClick={() => fillPrompt("What are the top 3 areas you’d like to grow in?")}
               >
-                Tough questions
+                What are the top 3 areas you’d like to grow in?
               </button>
-              <button className="chip" onClick={() => fillPrompt("Let’s do a mock interview. Start with a question.")}
+              <button className="chip" onClick={() => fillPrompt("What misconception do your coworkers have about you?")}
               >
-                Mock interview
+                What misconception do your coworkers have about you?
               </button>
             </div>
           </div>
@@ -395,7 +760,7 @@ export default function Chat() {
             </button>
             {debugOpen && (
               <div className="debug-panel" style={{ marginTop: 10 }}>
-                <div className="debug-line">APP_MODE: {process.env.NEXT_PUBLIC_APP_MODE || "quota_saver"}</div>
+                <div className="debug-line">APP_MODE: {appMode}</div>
                 <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
                 <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
                 {debug?.model_errors?.length ? (
