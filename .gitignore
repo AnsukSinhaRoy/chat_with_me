@@ -1,0 +1,15 @@
+# Dependencies
+node_modules
+/node_modules
+
+# Next.js build output
+.next
+/.next
+out
+
+# Environment variables (Sensitive data!)
+.env
+.env.local
+
+# System files
+.DS_Store
