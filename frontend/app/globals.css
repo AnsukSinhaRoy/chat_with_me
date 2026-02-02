@@ -408,14 +408,47 @@ button:disabled{
   width: min(920px, 100%);
   margin: 0 auto;
   display: flex;
+<<<<<<< HEAD
   align-items: flex-end;
   gap: 10px;
   padding: 10px 10px;
+=======
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 12px 10px;
+>>>>>>> d9ae87bb632a0d575b8d32eed3e6a80a3e31c4c0
   border-radius: 26px;
   background: rgba(0,0,0,0.18);
   border: 1px solid rgba(255,255,255,0.14);
   backdrop-filter: blur(14px);
   box-shadow: var(--shadow);
+}
+
+.composer-actions-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px 2px;
+}
+
+.composer-actions-left{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.composer-actions-right{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 520px){
+  .composer-actions-row{ flex-wrap: wrap; }
+  .composer-actions-right{ margin-left: auto; }
 }
 
 .composer-bar:focus-within{
@@ -428,13 +461,13 @@ button:disabled{
 }
 
 .prompt-input{
-  flex: 1;
+  width: 100%;
   border: none;
   outline: none;
   background: transparent;
   color: var(--text-main);
   font-size: 1.02rem;
-  padding: 10px 6px;
+  padding: 10px 8px;
   min-width: 0;
 
   /* textarea behaviour */

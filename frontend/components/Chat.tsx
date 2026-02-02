@@ -652,7 +652,9 @@ export default function Chat() {
                 ref={inputRef}
               />
 
-              {/* Gemini-like mode dropdown */}
+              <div className="composer-actions-row" aria-label="Composer actions">
+  <div className="composer-actions-left">
+    {/* Gemini-like mode dropdown */}
               <div className="mode-wrap" ref={modeMenuRef}>
                 <button
                   className="mode-pill"
@@ -690,8 +692,9 @@ export default function Chat() {
                   </div>
                 )}
               </div>
-
-              <button
+  </div>
+  <div className="composer-actions-right">
+    <button
                 className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
                 onClick={toggleRecording}
                 aria-label={micLabel}
@@ -700,7 +703,7 @@ export default function Chat() {
               >
                 {recording ? "■" : "🎤"}
               </button>
-              <button
+    <button
                 className="icon-btn send-btn"
                 onClick={sendText}
                 aria-label={sendLabel}
@@ -709,7 +712,9 @@ export default function Chat() {
               >
                 {busy ? <span className="spinner" aria-hidden="true" /> : "➤"}
               </button>
-            </div>
+  </div>
+</div>
+</div>
             <div className="composer-hint">Enter to send • Mic for voice</div>
           </div>
         </>
@@ -739,7 +744,9 @@ export default function Chat() {
                   ref={inputRef}
                 />
 
-                {/* Mode dropdown on landing too */}
+                <div className="composer-actions-row" aria-label="Composer actions">
+  <div className="composer-actions-left">
+    {/* Mode dropdown on landing too */}
                 <div className="mode-wrap" ref={modeMenuRef}>
                   <button
                     className="mode-pill"
@@ -777,8 +784,9 @@ export default function Chat() {
                     </div>
                   )}
                 </div>
-
-                <button
+  </div>
+  <div className="composer-actions-right">
+    <button
                   className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
                   onClick={toggleRecording}
                   aria-label={micLabel}
@@ -787,7 +795,7 @@ export default function Chat() {
                 >
                   {recording ? "■" : "🎤"}
                 </button>
-                <button
+    <button
                   className="icon-btn send-btn"
                   onClick={sendText}
                   aria-label={sendLabel}
@@ -796,7 +804,9 @@ export default function Chat() {
                 >
                   {busy ? <span className="spinner" aria-hidden="true" /> : "➤"}
                 </button>
-              </div>
+  </div>
+</div>
+</div>
             </div>
 
             <div className="hero-chips" aria-label="Quick prompts">

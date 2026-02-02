@@ -7,7 +7,11 @@
     "start": "next start -p 3000"
   },
   "dependencies": {
+<<<<<<< HEAD
     "next": "15.5.7",
+=======
+    "next": "15.1.11",
+>>>>>>> d9ae87bb632a0d575b8d32eed3e6a80a3e31c4c0
     "react": "19.0.0",
     "react-dom": "19.0.0"
   },
