@@ -34,11 +34,29 @@ If you only deploy the frontend, you must point it at some hosted backend:
 
 ## Local development
 
+## Lightweight retrieval (no database)
+
+If you want a **longer, richer profile** without paying tokens on every request,
+this repo supports a tiny "RAG-like" flow **without any database**:
+
+1. Put your background facts in `backend/app/profile_chunks.json` (short chunks).
+2. Generate an embeddings index (one-time, local):
+
+```bash
+export GEMINI_API_KEY=...
+python backend/scripts/build_profile_index.py
+```
+
+This writes `backend/app/profile_index.json` which the backend uses at runtime to
+select only the most relevant 2–3 chunks per user question.
+
+Config knobs are in `backend/.env.example` (TOP_K, similarity threshold, max chars).
+
 ### Backend
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
+.venv\Scripts\activate
 pip install -r requirements.txt
 export GEMINI_API_KEY=...
 uvicorn app.main:app --reload --port 8000

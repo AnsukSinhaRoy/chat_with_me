@@ -5,7 +5,8 @@ from typing import List, Dict, Any, Tuple
 from google import genai
 from google.genai import types
 
-from .prompts import SYSTEM_PROMPT
+from .prompts import SYSTEM_PROMPT_BASE
+from .retrieval import build_profile_context
 
 def _guess_mime(audio_bytes: bytes) -> str:
     if audio_bytes[:4] == b"RIFF":
@@ -135,8 +136,33 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
 
     candidates, max_output_tokens, max_hops, history_turns = _chat_mode_config(app_mode)
 
+    # Build a small system prompt + only the relevant profile facts for THIS question.
+    last_user_text = ""
+    for m in reversed(messages or []):
+        if m.get("role") == "user" and (m.get("content") or "").strip():
+            last_user_text = (m.get("content") or "").strip()
+            break
+
+    facts_block = build_profile_context(
+        client=client,
+        question_text=last_user_text,
+        embed_model=os.getenv("PROFILE_EMBED_MODEL", "gemini-embedding-001"),
+        output_dimensionality=int(os.getenv("PROFILE_EMBED_DIM", "256")),
+        k=int(os.getenv("PROFILE_TOP_K", "3")),
+        min_score=float(os.getenv("PROFILE_MIN_SCORE", "0.15")),
+        max_chars=int(os.getenv("PROFILE_MAX_CONTEXT_CHARS", "2800")),
+    )
+
+    system_instruction = SYSTEM_PROMPT_BASE
+    if facts_block:
+        system_instruction = (
+            SYSTEM_PROMPT_BASE
+            + "\n\nFACTS CONTEXT (use this as truth; do not invent details):\n"
+            + facts_block
+        )
+
     gen_config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=system_instruction,
         temperature=0.6,
         max_output_tokens=max_output_tokens,
     )

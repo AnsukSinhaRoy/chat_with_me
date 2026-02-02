@@ -102,6 +102,24 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Auto-growing prompt input (ChatGPT/Gemini style)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const MAX_TEXTAREA_PX = 160; // grows until this, then becomes scrollable
+
+  function focusPrompt() {
+    inputRef.current?.focus();
+  }
+
+  function autosizePrompt() {
+    const el = inputRef.current;
+    if (!el) return;
+    // Reset height so scrollHeight is accurate, then clamp.
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, MAX_TEXTAREA_PX);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_PX ? "auto" : "hidden";
+  }
+
   const [debugOpen, setDebugOpen] = useState(false);
   const [debug, setDebug] = useState<ChatResponse | null>(null);
 
@@ -176,6 +194,18 @@ export default function Chat() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, hasUserMessages]);
 
+  useEffect(() => {
+    // Keep the prompt height in sync with content.
+    autosizePrompt();
+  }, [input]);
+
+  useEffect(() => {
+    // When we're waiting on the assistant, keep the bottom in view.
+    if (busy && hasUserMessages) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [busy, hasUserMessages]);
+
   async function callChat(nextMessages: Message[]) {
     setBusy(true);
     setDebug(null);
@@ -220,6 +250,8 @@ export default function Chat() {
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
+    // height will reset via effect, but do it immediately for snappier UX
+    requestAnimationFrame(() => autosizePrompt());
 
     const next: Message[] = [...messagesRef.current, makeMsg("user", text)];
     setMessages(next);
@@ -244,9 +276,21 @@ export default function Chat() {
 
   function fillPrompt(text: string) {
     setInput(text);
-    // focus the input for faster iteration
-    const el = document.getElementById("prompt-input") as HTMLInputElement | null;
-    el?.focus();
+    // focus + autosize for faster iteration
+    requestAnimationFrame(() => {
+      autosizePrompt();
+      focusPrompt();
+    });
+  }
+
+  function onPromptKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter to send, Shift+Enter for newline.
+    // Also avoid breaking IME composition.
+    const isComposing = (e.nativeEvent as any)?.isComposing;
+    if (e.key === "Enter" && !e.shiftKey && !isComposing) {
+      e.preventDefault();
+      sendText();
+    }
   }
 
   function modeLabel(m: AppMode) {
@@ -560,12 +604,32 @@ export default function Chat() {
           <div className="chat-scroll-outer">
             <div className="chat-scroll-inner">
               <div className="chat">
-                {messages.map((m, idx) => (
-                  <div key={idx} className={`bubble ${m.role === "user" ? "user" : "ai"}`}>
-                    {m.content}
-                    <div className="meta">{m.ts}</div>
+                {messages.map((m, idx) => {
+                  const isPending = busy && idx === messages.length - 1 && m.role === "user";
+                  return (
+                    <div
+                      key={idx}
+                      className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}
+                    >
+                      {m.content}
+                      <div className="meta">{m.ts}</div>
+                    </div>
+                  );
+                })}
+
+                {busy ? (
+                  <div className="bubble ai typing" aria-label="Assistant is analyzing">
+                    <div className="typing-row">
+                      <span className="typing-label">Analyzing</span>
+                      <span className="typing-dots" aria-hidden="true">
+                        <span className="dot" />
+                        <span className="dot" />
+                        <span className="dot" />
+                      </span>
+                    </div>
                   </div>
-                ))}
+                ) : null}
+
                 {/* Spacer ensures the last message never sits behind the fixed composer */}
                 <div className="chat-bottom-spacer" aria-hidden="true" />
                 <div ref={chatEndRef} />
@@ -575,18 +639,17 @@ export default function Chat() {
 
           <div className="composer composer-fixed" aria-label="Message composer">
             <div className={`composer-bar ${busy ? "is-busy" : ""}`}>
-              <input
+              <textarea
                 id="prompt-input"
                 className="prompt-input"
-                type="text"
                 placeholder="Ask anything…"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") sendText();
-                }}
+                onKeyDown={onPromptKeyDown}
                 disabled={busy}
                 autoComplete="off"
+                rows={1}
+                ref={inputRef}
               />
 
               {/* Gemini-like mode dropdown */}
@@ -642,9 +705,9 @@ export default function Chat() {
                 onClick={sendText}
                 aria-label={sendLabel}
                 title={sendLabel}
-                disabled={busy}
+                disabled={busy || !input.trim()}
               >
-                ➤
+                {busy ? <span className="spinner" aria-hidden="true" /> : "➤"}
               </button>
             </div>
             <div className="composer-hint">Enter to send • Mic for voice</div>
@@ -663,18 +726,17 @@ export default function Chat() {
 
             <div className="composer composer-hero" aria-label="Message composer">
               <div className={`composer-bar ${busy ? "is-busy" : ""}`}>
-                <input
+                <textarea
                   id="prompt-input"
                   className="prompt-input"
-                  type="text"
                   placeholder="Ask anything…"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") sendText();
-                  }}
+                  onKeyDown={onPromptKeyDown}
                   disabled={busy}
                   autoComplete="off"
+                  rows={1}
+                  ref={inputRef}
                 />
 
                 {/* Mode dropdown on landing too */}
@@ -730,9 +792,9 @@ export default function Chat() {
                   onClick={sendText}
                   aria-label={sendLabel}
                   title={sendLabel}
-                  disabled={busy}
+                  disabled={busy || !input.trim()}
                 >
-                  ➤
+                  {busy ? <span className="spinner" aria-hidden="true" /> : "➤"}
                 </button>
               </div>
             </div>
