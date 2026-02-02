@@ -11,8 +11,7 @@ export default function Page() {
             <div>
               <div className="brand-title">Talk to Ansuk</div>
               <div className="brand-subtitle">
-                Applied ML • Deep RL • Reproducible experiments
-                <span style={{ opacity: 0.7 }}> • Tip: Chrome works best for voice.</span>
+                Applied ML • Deep RL • Fintech
               </div>
             </div>
           </div>

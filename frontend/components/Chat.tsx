@@ -652,9 +652,9 @@ export default function Chat() {
           <div className="hero">
             <div className="hero-copy">
               <div className="hero-kicker">✨ Hi</div>
-              <h1 className="hero-title">Where should we start?</h1>
+              <h1 className="hero-title">Meet my AI twin</h1>
               <p className="hero-subtitle">
-                Ask interview-style questions about projects, deep RL, strengths, growth areas — or just talk.
+                Ask interview-style questions about projects, deep RL, strengths, growth areas — it replies like I would.
               </p>
             </div>
 
