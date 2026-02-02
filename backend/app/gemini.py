@@ -21,10 +21,12 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     if app_mode == "quota_saver":
         return (
             [
-                "models/gemini-flash-lite-latest",
-                "models/gemini-2.0-flash-lite-001",
-                "models/gemini-2.0-flash",
-                "models/gemma-3-12b-it",
+                # Use only Gemini models here. Gemma models currently return
+                # 400 INVALID_ARGUMENT when a system/developer instruction is provided.
+                "gemini-2.5-flash-lite",
+                "gemini-2.0-flash-lite",
+                "gemini-2.0-flash",
+                "gemini-2.5-flash",
             ],
             512,  # max_output_tokens
             1,    # max_hops
@@ -33,10 +35,10 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     if app_mode == "quality":
         return (
             [
-                "models/gemini-2.5-pro",
-                "models/gemini-pro-latest",
-                "models/gemini-2.5-flash",
-                "models/gemini-2.0-flash-001",
+                "gemini-2.5-pro",
+                "gemini-2.5-flash",
+                "gemini-2.0-flash-001",
+                "gemini-2.0-flash",
             ],
             1400,
             2,
@@ -45,12 +47,11 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     # normal
     return (
         [
-            "models/gemini-2.0-flash-001",
-            "models/gemini-2.0-flash",
-            "models/gemini-flash-latest",
-            "models/gemini-2.0-flash-lite-001",
-            "models/gemini-flash-lite-latest",
-            "models/gemma-3-12b-it",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash-001",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
         ],
         900,
         2,
@@ -58,18 +59,42 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     )
 
 TRANSCRIBE_MODEL_CANDIDATES = [
-    "models/gemini-2.5-flash-native-audio-latest",
-    "models/gemini-2.5-flash-native-audio-preview-09-2025",
-    "models/gemini-2.5-flash-native-audio-preview-12-2025",
-    "models/gemini-2.0-flash",
-    "models/gemini-2.0-flash-lite",
+    # Model codes per Gemini API docs.
+    "gemini-2.5-flash-native-audio-preview-12-2025",
+    "gemini-2.5-flash-native-audio-preview-09-2025",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
 ]
 
 def build_gemini_history(messages: List[Dict[str, Any]], history_turns: int) -> List[Dict[str, Any]]:
-    contents = []
+    """Build Gemini `contents` history.
+
+    Gemini multi-turn works best when the FIRST turn is from the user.
+    The UI includes an initial assistant greeting; if sent first, Gemini may reject.
+    We also merge consecutive same-role messages to reduce token overhead.
+    """
+    raw: List[Tuple[str, str]] = []
     for m in messages[-history_turns:]:
-        role = "user" if m["role"] == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": m["content"]}]})
+        role = "user" if m.get("role") == "user" else "model"
+        text = (m.get("content") or "").strip()
+        if not text:
+            continue
+        raw.append((role, text))
+
+    # Merge consecutive same-role turns
+    merged: List[Tuple[str, str]] = []
+    for role, text in raw:
+        if merged and merged[-1][0] == role:
+            merged[-1] = (role, merged[-1][1].rstrip() + "\\n" + text)
+        else:
+            merged.append((role, text))
+
+    contents = [{"role": r, "parts": [{"text": t}]} for r, t in merged]
+
+    # Ensure first turn is user
+    while contents and contents[0]["role"] != "user":
+        contents.pop(0)
+
     return contents
 
 def needs_continue(t: str) -> bool:
@@ -117,6 +142,15 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     )
 
     hist = build_gemini_history(messages, history_turns)
+
+    if not hist:
+        # Fallback: ensure we always send at least one user message
+        last_user = ""
+        for m in reversed(messages or []):
+            if m.get("role") == "user" and (m.get("content") or "").strip():
+                last_user = (m.get("content") or "").strip()
+                break
+        hist = [{"role": "user", "parts": [{"text": last_user or "Hello"}]}]
 
     resp, used_model, last_tried, errors = _generate_with_fallback(client, candidates, hist, gen_config)
     bot_text = strip_continue_token((resp.text or "").strip()) or "I didn’t catch that fully — can you say it again?"

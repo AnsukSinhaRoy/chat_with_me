@@ -10,6 +10,12 @@ type Message = {
   ts: string;
 };
 
+// Helper to prevent TypeScript from widening string literals like "user" to `string`
+// when building arrays of messages (important for strict builds on Vercel).
+function makeMsg(role: Role, content: string): Message {
+  return { role, content, ts: hhmm() };
+}
+
 type ChatResponse = {
   reply: string;
   used_model?: string | null;
@@ -87,12 +93,10 @@ export default function Chat() {
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content:
-        "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever.",
-      ts: hhmm(),
-    },
+    makeMsg(
+      "assistant",
+      "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever."
+    ),
   ]);
 
   const [input, setInput] = useState("");
@@ -184,20 +188,29 @@ export default function Chat() {
           app_mode: appMode,
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const txt = await res.text();
+        // Best-effort: backend usually returns {"detail": "..."}
+        let msg = txt;
+        try {
+          const j = JSON.parse(txt);
+          msg = j?.detail || j?.error || txt;
+        } catch {
+          // keep raw text
+        }
+        throw new Error(String(msg));
+      }
       const data: ChatResponse = await res.json();
 
-      const botMsg: Message = { role: "assistant", content: data.reply, ts: hhmm() };
+      const botMsg: Message = makeMsg("assistant", data.reply);
       setMessages((prev) => [...prev, botMsg]);
       setDebug(data);
 
       // Speak after a user-initiated action (send/stop recording) to avoid autoplay blocks
       speak(data.reply);
     } catch (e: any) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "I hit a temporary limit. Try again in a moment.", ts: hhmm() },
-      ]);
+      const errMsg = (e?.message || "Request failed").toString().slice(0, 240);
+      setMessages((prev) => [...prev, makeMsg("assistant", `⚠️ ${errMsg}`)]);
     } finally {
       setBusy(false);
     }
@@ -208,20 +221,13 @@ export default function Chat() {
     if (!text || busy) return;
     setInput("");
 
-    const userMsg: Message = { role: "user", content: text, ts: hhmm() };
-    const next = [...messagesRef.current, userMsg];
+    const next: Message[] = [...messagesRef.current, makeMsg("user", text)];
     setMessages(next);
     await callChat(next);
   }
 
   function newChat() {
-    setMessages([
-      {
-        role: "assistant",
-        content: "Fresh slate. Hit me with your best interview question.",
-        ts: hhmm(),
-      },
-    ]);
+    setMessages([makeMsg("assistant", "Fresh slate. Hit me with your best interview question.")]);
     setDebug(null);
     setDebugOpen(false);
   }
@@ -468,10 +474,10 @@ export default function Chat() {
         const srInterim = transcriptRef.current.interim.trim();
         cleanupRecording();
 
+        // Prefer Web Speech API transcript if available (usually clearer + already text)
         const preferredText = (srText || srInterim).trim();
         if (preferredText) {
-          const userMsg: Message = { role: "user", content: preferredText, ts: hhmm() };
-          const next = [...messagesRef.current, userMsg];
+          const next: Message[] = [...messagesRef.current, makeMsg("user", preferredText)];
           setMessages(next);
           await callChat(next);
           return;
@@ -485,17 +491,14 @@ export default function Chat() {
         try {
           const tr = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
           if (!tr.ok) throw new Error(await tr.text());
-          const data = await tr.json();
+          const data = (await tr.json()) as { text: string };
+
           const userText = (data.text || "").trim() || "(Audio unclear)";
-          const userMsg: Message = { role: "user", content: userText, ts: hhmm() };
-          const next = [...messagesRef.current, userMsg];
+          const next: Message[] = [...messagesRef.current, makeMsg("user", userText)];
           setMessages(next);
           await callChat(next);
         } catch {
-          setMessages((prev) => [
-            ...prev,
-            { role: "assistant", content: "Audio upload/transcribe failed — try again.", ts: hhmm() },
-          ]);
+          setMessages((prev) => [...prev, makeMsg("assistant", "Audio upload/transcribe failed — try again.")]);
         } finally {
           setBusy(false);
         }
