@@ -31,3 +31,6 @@ Expected response:
 ```
 
 The Vercel entrypoint is `api/index.py`. Do not change the `functions` glob to `app/**/*.py`; Vercel's Python function configuration expects function files under `api/`.
+
+
+The backend root `/` now returns a small JSON status message instead of a confusing 404. `/healthz` and `/api/healthz` both return `{ "ok": true }`.

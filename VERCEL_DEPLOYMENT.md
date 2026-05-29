@@ -58,3 +58,31 @@ Expected:
 ```json
 {"ok": true}
 ```
+
+## Important runtime checks
+
+After deploying the backend, open:
+
+```text
+https://your-backend-domain/
+```
+
+Expected: a JSON message saying the backend is running. Also check:
+
+```text
+https://your-backend-domain/healthz
+```
+
+Expected:
+
+```json
+{"ok": true}
+```
+
+For the frontend deployment, set this environment variable before building/redeploying:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=https://your-backend-domain
+```
+
+Do not point `NEXT_PUBLIC_API_BASE_URL` to the frontend domain. If it is missing or wrong, the app will now show `Backend not configured`, `Backend offline`, or a clear 404/CORS/Gemini-key error instead of pretending to be online.

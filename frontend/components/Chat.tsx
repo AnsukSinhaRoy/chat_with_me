@@ -30,6 +30,82 @@ const MAX_TEXTAREA_PX = 160;
 const MAX_RECORDING_MS = 22_000;
 const SILENCE_STOP_MS = 1_150;
 
+const CONFIGURED_API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE_URL || "");
+
+function normalizeApiBase(value: string) {
+  return value.trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+}
+
+function buildApiUrl(path: string) {
+  if (!CONFIGURED_API_BASE) {
+    throw new Error(
+      "Backend URL is not configured. Set NEXT_PUBLIC_API_BASE_URL in the frontend Vercel project to your backend domain, then redeploy the frontend."
+    );
+  }
+
+  return `${CONFIGURED_API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function configuredApiLabel() {
+  return CONFIGURED_API_BASE || "Not configured";
+}
+
+function stringifyServerMessage(raw: string) {
+  const text = raw.trim();
+  if (!text) return "";
+
+  try {
+    const parsed = JSON.parse(text);
+    const detail = parsed?.detail || parsed?.error || parsed?.message;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) return detail.map((item) => item?.msg || JSON.stringify(item)).join("; ");
+    if (parsed?.code === "NOT_FOUND" || parsed?.errorCode === "NOT_FOUND") return "Vercel returned NOT_FOUND.";
+  } catch {
+    // Fall through to text checks below.
+  }
+
+  if (/NOT_FOUND/i.test(text) || /page could not be found/i.test(text)) return "Vercel returned NOT_FOUND.";
+  if (/<html|<!doctype/i.test(text)) return "The server returned an HTML error page instead of JSON.";
+  return text.slice(0, 360);
+}
+
+async function responseErrorMessage(response: Response, area: "chat" | "transcription" | "health") {
+  const raw = await response.text().catch(() => "");
+  const detail = stringifyServerMessage(raw);
+
+  if (response.status === 404) {
+    return (
+      "Backend route not found. This usually means the frontend is calling the wrong Vercel project/domain. " +
+      "Set NEXT_PUBLIC_API_BASE_URL to the backend domain, and confirm that BACKEND_URL/healthz returns {\"ok\":true}."
+    );
+  }
+
+  if (/Missing GEMINI_API_KEY/i.test(detail)) {
+    return "Backend is deployed, but GEMINI_API_KEY is missing in the backend environment variables.";
+  }
+
+  if (response.status === 413) {
+    return "The audio file was too large for the backend. Record a shorter clip and try again.";
+  }
+
+  const prefix = area === "chat" ? "Chat request failed" : area === "transcription" ? "Transcription failed" : "Backend health check failed";
+  return `${prefix} (${response.status}). ${detail || response.statusText || "No useful error message returned."}`;
+}
+
+function friendlyRequestError(error: unknown, area: "chat" | "transcription") {
+  const message = error instanceof Error ? error.message : String(error || "Request failed");
+
+  if (/Backend URL is not configured/i.test(message)) return message;
+  if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+    return (
+      "Could not reach the backend. Check NEXT_PUBLIC_API_BASE_URL in the frontend deployment and CORS_ORIGINS in the backend deployment. " +
+      "Also verify that the backend /healthz endpoint opens in the browser."
+    );
+  }
+
+  return message;
+}
+
 function hhmm() {
   const d = new Date();
   const hh = String(d.getHours()).padStart(2, "0");
@@ -106,7 +182,6 @@ function speak(text: string) {
 }
 
 export default function Chat() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
   const DEFAULT_MODE = normalizeAppMode(process.env.NEXT_PUBLIC_APP_MODE);
 
   const [appMode, setAppMode] = useState<AppMode>(DEFAULT_MODE);
@@ -218,31 +293,21 @@ export default function Chat() {
     setDebug(null);
 
     try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
+      const res = await fetch(buildApiUrl("/api/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: nextMessages, app_mode: appMode }),
       });
 
-      if (!res.ok) {
-        const txt = await res.text();
-        let message = txt;
-        try {
-          const parsed = JSON.parse(txt);
-          message = parsed?.detail || parsed?.error || txt;
-        } catch {
-          // Keep raw response text.
-        }
-        throw new Error(String(message));
-      }
+      if (!res.ok) throw new Error(await responseErrorMessage(res, "chat"));
 
       const data: ChatResponse = await res.json();
       const botMsg = makeMsg("assistant", data.reply);
       setMessages((prev) => [...prev, botMsg]);
       setDebug(data);
       speak(data.reply);
-    } catch (error: any) {
-      const errMsg = String(error?.message || "Request failed").slice(0, 260);
+    } catch (error: unknown) {
+      const errMsg = friendlyRequestError(error, "chat").slice(0, 520);
       setMessages((prev) => [...prev, makeMsg("assistant", `⚠️ ${errMsg}`)]);
     } finally {
       setBusy(false);
@@ -585,16 +650,16 @@ export default function Chat() {
         try {
           const form = new FormData();
           form.append("file", blob, "voice.webm");
-          const response = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
-          if (!response.ok) throw new Error(await response.text());
+          const response = await fetch(buildApiUrl("/api/transcribe"), { method: "POST", body: form });
+          if (!response.ok) throw new Error(await responseErrorMessage(response, "transcription"));
 
           const data = (await response.json()) as { text?: string };
           const text = String(data.text || "").trim();
           setTranscriptPreview(text);
           await sendVoiceTranscript(text);
-        } catch {
+        } catch (error: unknown) {
           setVoicePhase("idle");
-          setVoiceError("Audio upload/transcription failed. The typed input still works.");
+          setVoiceError(friendlyRequestError(error, "transcription"));
         }
       };
 
@@ -699,6 +764,30 @@ export default function Chat() {
     );
   }
 
+  function renderDebugPanel(extraClassName = "") {
+    return (
+      <div className={`debug-panel ${extraClassName}`.trim()}>
+        <div className="debug-row">
+          <span>Backend URL</span>
+          <strong>{configuredApiLabel()}</strong>
+        </div>
+        <div className="debug-row">
+          <span>APP_MODE</span>
+          <strong>{appMode}</strong>
+        </div>
+        <div className="debug-row">
+          <span>Last used model</span>
+          <strong>{debug?.used_model || "-"}</strong>
+        </div>
+        <div className="debug-row">
+          <span>Last tried model</span>
+          <strong>{debug?.last_tried_model || "-"}</strong>
+        </div>
+        {debug?.model_errors?.length ? <pre className="debug-pre">{debug.model_errors.join("\n")}</pre> : null}
+      </div>
+    );
+  }
+
   function renderComposer(extraClassName: string) {
     const micLabel = voicePhase === "recording" ? "Stop recording" : "Start voice input";
 
@@ -769,14 +858,7 @@ export default function Chat() {
             </button>
           </div>
 
-          {debugOpen ? (
-            <div className="debug-panel">
-              <div className="debug-line">APP_MODE: {appMode}</div>
-              <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
-              <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
-              {debug?.model_errors?.length ? <pre className="debug-pre">{debug.model_errors.join("\n")}</pre> : null}
-            </div>
-          ) : null}
+          {debugOpen ? renderDebugPanel() : null}
 
           <div className="chat-scroll-outer">
             <div className="chat-scroll-inner">
@@ -837,14 +919,7 @@ export default function Chat() {
             <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn" type="button">
               Debug
             </button>
-            {debugOpen ? (
-              <div className="debug-panel landing-debug-panel">
-                <div className="debug-line">APP_MODE: {appMode}</div>
-                <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
-                <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
-                {debug?.model_errors?.length ? <pre className="debug-pre">{debug.model_errors.join("\n")}</pre> : null}
-              </div>
-            ) : null}
+            {debugOpen ? renderDebugPanel("landing-debug-panel") : null}
           </div>
         </>
       )}

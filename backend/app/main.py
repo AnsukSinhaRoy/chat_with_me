@@ -53,8 +53,22 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+def root() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "service": "Talk to Ansuk API",
+        "message": "Backend is running. Use /healthz for health checks, /api/chat for chat, and /api/transcribe for voice transcription.",
+    }
+
+
 @app.get("/healthz")
 def healthz() -> Dict[str, bool]:
+    return {"ok": True}
+
+
+@app.get("/api/healthz")
+def api_healthz() -> Dict[str, bool]:
     return {"ok": True}
 
 

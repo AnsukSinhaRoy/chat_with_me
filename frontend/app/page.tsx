@@ -1,5 +1,6 @@
 import "./globals.css";
 import Chat from "../components/Chat";
+import BackendStatus from "../components/BackendStatus";
 
 export default function Page() {
   return (
@@ -15,7 +16,7 @@ export default function Page() {
               </div>
             </div>
           </div>
-          <div className="status-pill">● Online</div>
+          <BackendStatus />
         </div>
       </header>
 

@@ -8,7 +8,7 @@ const nextConfig = {
   },
   experimental: {
     // Disabling the separate webpack build worker avoids intermittent CI/Vercel hangs
-    // seen with this small static app on Next 15.x/Turbopack builds.
+    // seen with this small static app on serverless CI builds.
     webpackBuildWorker: false,
   },
 };
