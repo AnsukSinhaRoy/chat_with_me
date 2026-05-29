@@ -35,7 +35,7 @@ const CONFIGURED_API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE_UR
 const VOICE_TRANSCRIPTION_MODE = normalizeVoiceTranscriptionMode(process.env.NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE);
 const BROWSER_STT_LANG = process.env.NEXT_PUBLIC_BROWSER_STT_LANG || "en-IN";
 const REQUIRE_LOCAL_BROWSER_STT = process.env.NEXT_PUBLIC_BROWSER_STT_PROCESS_LOCALLY === "true";
-const AUTO_SEND_VOICE = process.env.NEXT_PUBLIC_AUTO_SEND_VOICE === "true";
+const AUTO_SEND_VOICE = process.env.NEXT_PUBLIC_AUTO_SEND_VOICE !== "false";
 
 function normalizeApiBase(value: string) {
   return value.trim().replace(/\/+$/, "").replace(/\/api$/i, "");
@@ -186,6 +186,8 @@ export default function Chat() {
   const transcriptRef = useRef<SpeechBuffer>({ finalSegments: {}, interimSegments: {} });
   const browserSpeechAutoStopTimerRef = useRef<number | null>(null);
   const browserSpeechHadResultRef = useRef(false);
+  const browserDoneRequestedRef = useRef(false);
+  const voicePhaseRef = useRef<VoicePhase>("idle");
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -213,6 +215,9 @@ export default function Chat() {
     messagesRef.current = messages;
   }, [messages]);
 
+  useEffect(() => {
+    voicePhaseRef.current = voicePhase;
+  }, [voicePhase]);
 
   useEffect(() => {
     if (!modeMenuOpen) return;
@@ -315,14 +320,20 @@ export default function Chat() {
       return;
     }
 
-    setVoicePhase("idle");
     setTranscriptPreview("");
 
     if (!clean) {
+      setVoicePhase("idle");
       setVoiceError("I could not detect clear speech. Try again closer to the mic.");
       return;
     }
 
+    setInput(clean);
+    requestAnimationFrame(() => autosizePrompt());
+    await new Promise((resolve) => window.setTimeout(resolve, 90));
+
+    setInput("");
+    setVoicePhase("idle");
     const next = [...messagesRef.current, makeMsg("user", clean)];
     setMessages(next);
     await callChat(next);
@@ -382,6 +393,7 @@ export default function Chat() {
     silenceSinceRef.current = null;
     hadSpeechRef.current = false;
     browserSpeechHadResultRef.current = false;
+    browserDoneRequestedRef.current = false;
     transcriptRef.current = { finalSegments: {}, interimSegments: {} };
   }
 
@@ -406,16 +418,8 @@ export default function Chat() {
     }
   }
 
-  function cleanupRecordingResources() {
+  function cleanupVoiceInputMedia() {
     stopWaveform();
-    clearVoiceTimers();
-
-    try {
-      recognitionRef.current?.stop?.();
-    } catch {
-      // Already stopped.
-    }
-    recognitionRef.current = null;
 
     try {
       if (audioCtxRef.current?.state !== "closed") audioCtxRef.current?.close?.();
@@ -430,6 +434,19 @@ export default function Chat() {
       // Ignore device cleanup failures.
     }
     streamRef.current = null;
+  }
+
+  function cleanupRecordingResources() {
+    cleanupVoiceInputMedia();
+    clearVoiceTimers();
+
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      // Already stopped.
+    }
+    recognitionRef.current = null;
+
     mediaRecorderRef.current = null;
     resetVoiceRefs();
   }
@@ -524,7 +541,7 @@ export default function Chat() {
   function configureSpeechRecognitionHandlers(rec: any, submitOnEnd: boolean) {
     rec.lang = BROWSER_STT_LANG;
     rec.interimResults = false;
-    rec.continuous = false;
+    rec.continuous = true;
     rec.maxAlternatives = 1;
 
     if (REQUIRE_LOCAL_BROWSER_STT && "processLocally" in rec) {
@@ -552,11 +569,10 @@ export default function Chat() {
       }
 
       if (hasUsableResult) browserSpeechHadResultRef.current = true;
-      scheduleBrowserSpeechAutoStop(rec);
     };
 
     rec.onspeechend = () => {
-      scheduleBrowserSpeechAutoStop(rec);
+      // Do not auto-stop. The user controls completion with the Done button.
     };
 
     rec.onerror = (event: any) => {
@@ -572,6 +588,11 @@ export default function Chat() {
 
       if (!submitOnEnd) return;
 
+      if (!browserDoneRequestedRef.current && voicePhaseRef.current === "recording") {
+        restartBrowserRecognition();
+        return;
+      }
+
       const text = buildFinalTranscriptText() || buildTranscriptText();
       if (!text) {
         setVoicePhase("idle");
@@ -585,7 +606,10 @@ export default function Chat() {
         return;
       }
 
-      await commitVoiceTranscript(text);
+      setVoicePhase("transcribing");
+      window.setTimeout(() => {
+        void commitVoiceTranscript(text);
+      }, 180);
     };
   }
 
@@ -603,6 +627,50 @@ export default function Chat() {
     }
   }
 
+  function restartBrowserRecognition() {
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor || browserDoneRequestedRef.current) return;
+
+    try {
+      const rec = new SpeechRecognitionCtor();
+      recognitionRef.current = rec;
+      configureSpeechRecognitionHandlers(rec, true);
+      rec.start();
+    } catch {
+      // Some mobile browsers end recognition after silence and refuse immediate restart.
+      // Keep the waveform active and wait for the user to tap Done.
+      recognitionRef.current = null;
+    }
+  }
+
+  async function startBrowserWaveformPreview() {
+    if (!navigator.mediaDevices?.getUserMedia) return;
+
+    const rawStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      } as MediaTrackConstraints,
+    });
+    streamRef.current = rawStream;
+
+    const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    const audioCtx: AudioContext = new AudioContextCtor();
+    audioCtxRef.current = audioCtx;
+    await audioCtx.resume?.();
+
+    const source = audioCtx.createMediaStreamSource(rawStream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.82;
+    source.connect(analyser);
+    startWaveform(analyser, { autoStopOnSilence: false });
+  }
+
   async function startBrowserSpeechInput() {
     const SpeechRecognitionCtor = getSpeechRecognitionCtor();
     if (!SpeechRecognitionCtor) {
@@ -611,6 +679,7 @@ export default function Chat() {
       return;
     }
 
+    browserDoneRequestedRef.current = false;
     setVoicePhase("requesting");
 
     try {
@@ -623,20 +692,20 @@ export default function Chat() {
         }
       }
 
+      try {
+        await startBrowserWaveformPreview();
+      } catch {
+        // Speech recognition can still work even if the visualizer cannot access Web Audio.
+      }
+
       const rec = new SpeechRecognitionCtor();
       recognitionRef.current = rec;
       configureSpeechRecognitionHandlers(rec, true);
       rec.start();
       setVoicePhase("recording");
-      maxRecTimerRef.current = window.setTimeout(() => {
-        try {
-          rec.stop();
-        } catch {
-          // Already stopped by the browser.
-        }
-      }, MAX_RECORDING_MS);
     } catch (error: unknown) {
       clearVoiceTimers();
+      cleanupVoiceInputMedia();
       recognitionRef.current = null;
       setVoicePhase("idle");
       setVoiceError(error instanceof Error ? error.message : "Could not start browser speech recognition.");
@@ -644,17 +713,29 @@ export default function Chat() {
   }
 
   function stopBrowserSpeechInput() {
-    setVoicePhase("stopping");
+    browserDoneRequestedRef.current = true;
+    setVoicePhase("transcribing");
     clearVoiceTimers();
+    cleanupVoiceInputMedia();
+
+    const rec = recognitionRef.current;
+    if (!rec) {
+      const text = buildFinalTranscriptText() || buildTranscriptText();
+      if (text) void commitVoiceTranscript(text);
+      else setVoicePhase("idle");
+      return;
+    }
 
     try {
-      recognitionRef.current?.stop?.();
+      rec.stop?.();
     } catch {
-      setVoicePhase("idle");
+      const text = buildFinalTranscriptText() || buildTranscriptText();
+      if (text) void commitVoiceTranscript(text);
+      else setVoicePhase("idle");
     }
   }
 
-  function startWaveform(analyser: AnalyserNode) {
+  function startWaveform(analyser: AnalyserNode, options: { autoStopOnSilence?: boolean } = {}) {
     const data = new Uint8Array(analyser.fftSize);
     let noiseFloor = 0.01;
 
@@ -681,7 +762,7 @@ export default function Chat() {
       if (rms > speechThreshold) {
         hadSpeechRef.current = true;
         silenceSinceRef.current = null;
-      } else if (hadSpeechRef.current) {
+      } else if (options.autoStopOnSilence !== false && hadSpeechRef.current) {
         if (silenceSinceRef.current == null) silenceSinceRef.current = now;
         if (now - silenceSinceRef.current > SILENCE_STOP_MS) {
           stopRecording();
@@ -766,7 +847,7 @@ export default function Chat() {
         compressor.connect(gain);
         gain.connect(destination);
         recordStream = destination.stream;
-        startWaveform(analyser);
+        startWaveform(analyser, { autoStopOnSilence: true });
       }
 
       const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
@@ -892,11 +973,9 @@ export default function Chat() {
 
     const subtitle =
       voicePhase === "recording"
-        ? VOICE_TRANSCRIPTION_MODE === "browser"
-          ? "Speak naturally, then pause or tap Stop. I’ll place the transcript in the text box for review."
-          : "Speak naturally. I’ll place the transcript in the text box for review."
+        ? "Recording. Tap Done when you finish speaking."
         : voicePhase === "transcribing"
-          ? "Converting speech to text…"
+          ? "Transcribing and sending…"
           : voiceError || transcriptPreview;
 
     return (
@@ -912,7 +991,7 @@ export default function Chat() {
               type="button"
               onClick={VOICE_TRANSCRIPTION_MODE === "browser" ? stopBrowserSpeechInput : stopRecording}
             >
-              Stop
+              Done
             </button>
           ) : null}
         </div>
@@ -957,7 +1036,7 @@ export default function Chat() {
   }
 
   function renderComposer(extraClassName: string) {
-    const micLabel = voicePhase === "recording" ? "Stop recording" : "Start voice input";
+    const micLabel = voicePhase === "recording" ? "Done recording" : "Start voice input";
 
     return (
       <div className={`composer ${extraClassName}`} aria-label="Message composer">
@@ -967,7 +1046,7 @@ export default function Chat() {
           <textarea
             id="prompt-input"
             className="prompt-input"
-            placeholder={voicePhase === "recording" ? "Listening…" : "Ask anything…"}
+            placeholder={voicePhase === "recording" ? "Recording…" : "Ask anything…"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onPromptKeyDown}
@@ -1006,7 +1085,7 @@ export default function Chat() {
         </div>
 
         <div className="composer-hint">
-          Enter to send • Shift+Enter for newline • Mic fills the box for review
+          Enter to send • Shift+Enter for newline • Mic records until Done, then transcribes and sends
         </div>
       </div>
     );
