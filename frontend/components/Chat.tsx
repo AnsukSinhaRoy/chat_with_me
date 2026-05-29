@@ -183,8 +183,6 @@ export default function Chat() {
   const silenceSinceRef = useRef<number | null>(null);
   const hadSpeechRef = useRef(false);
   const recognitionRef = useRef<any>(null);
-  const browserSpeechTrackRef = useRef<MediaStreamTrack | null>(null);
-  const browserUsingSharedAudioTrackRef = useRef(false);
   const transcriptRef = useRef<SpeechBuffer>({ finalSegments: {}, interimSegments: {} });
   const nextFinalSegmentIdRef = useRef(0);
   const syntheticWaveformRafRef = useRef<number | null>(null);
@@ -432,14 +430,6 @@ export default function Chat() {
     stopWaveform();
 
     try {
-      browserSpeechTrackRef.current?.stop?.();
-    } catch {
-      // Ignore cloned speech-track cleanup failures.
-    }
-    browserSpeechTrackRef.current = null;
-    browserUsingSharedAudioTrackRef.current = false;
-
-    try {
       if (audioCtxRef.current?.state !== "closed") audioCtxRef.current?.close?.();
     } catch {
       // Browser may already close it.
@@ -604,7 +594,6 @@ export default function Chat() {
     rec.onend = async () => {
       clearVoiceTimers();
       recognitionRef.current = null;
-      stopBrowserRecognitionTrack();
 
       if (!submitOnEnd) return;
 
@@ -614,8 +603,6 @@ export default function Chat() {
       }
 
       const text = buildFinalTranscriptText() || buildTranscriptText();
-      cleanupVoiceInputMedia();
-
       if (!text) {
         setVoicePhase("idle");
         setTranscriptPreview("");
@@ -649,57 +636,18 @@ export default function Chat() {
     }
   }
 
-  function stopBrowserRecognitionTrack() {
-    try {
-      browserSpeechTrackRef.current?.stop?.();
-    } catch {
-      // Ignore cloned track cleanup failures.
-    }
-    browserSpeechTrackRef.current = null;
-  }
-
-  function startRecognition(rec: any) {
-    const micTrack = streamRef.current?.getAudioTracks?.().find((track) => track.readyState === "live");
-
-    // Preferred path: use one getUserMedia stream, clone its audio track, and pass the
-    // clone directly into SpeechRecognition. The original stream feeds the visualizer.
-    // This avoids opening two separate microphone captures on mobile.
-    if (micTrack && typeof micTrack.clone === "function") {
-      const speechTrack = micTrack.clone();
-      browserSpeechTrackRef.current = speechTrack;
-
-      try {
-        rec.start(speechTrack);
-        browserUsingSharedAudioTrackRef.current = true;
-        return true;
-      } catch {
-        stopBrowserRecognitionTrack();
-        browserUsingSharedAudioTrackRef.current = false;
-      }
-    }
-
-    // Fallback for browsers that do not yet support SpeechRecognition.start(audioTrack).
-    // Stop the analyzer's mic stream first; otherwise mobile browsers may let the
-    // waveform work while speech recognition produces no transcript.
-    cleanupVoiceInputMedia();
-    startSyntheticWaveformPreview();
-    rec.start();
-    return false;
-  }
-
   function restartBrowserRecognition() {
     const SpeechRecognitionCtor = getSpeechRecognitionCtor();
     if (!SpeechRecognitionCtor || browserDoneRequestedRef.current) return;
 
     try {
-      stopBrowserRecognitionTrack();
       const rec = new SpeechRecognitionCtor();
       recognitionRef.current = rec;
       configureSpeechRecognitionHandlers(rec, true);
-      startRecognition(rec);
+      rec.start();
     } catch {
       // Some mobile browsers end recognition after silence and refuse immediate restart.
-      // Keep the UI active and wait for the user to tap Done.
+      // Keep the waveform active and wait for the user to tap Done.
       recognitionRef.current = null;
     }
   }
@@ -771,12 +719,15 @@ export default function Chat() {
         }
       }
 
-      await startBrowserWaveformPreview();
+      // In browser-STT mode, do not open a second getUserMedia microphone stream for the waveform.
+      // Mobile browsers often let the visualizer access the mic while SpeechRecognition then returns no transcript.
+      // This animated waveform keeps the UI feedback without competing with SpeechRecognition for audio capture.
+      startSyntheticWaveformPreview();
 
       const rec = new SpeechRecognitionCtor();
       recognitionRef.current = rec;
       configureSpeechRecognitionHandlers(rec, true);
-      startRecognition(rec);
+      rec.start();
       setVoicePhase("recording");
     } catch (error: unknown) {
       clearVoiceTimers();
@@ -791,12 +742,11 @@ export default function Chat() {
     browserDoneRequestedRef.current = true;
     setVoicePhase("transcribing");
     clearVoiceTimers();
-    stopWaveform();
+    cleanupVoiceInputMedia();
 
     const rec = recognitionRef.current;
     if (!rec) {
       const text = buildFinalTranscriptText() || buildTranscriptText();
-      cleanupVoiceInputMedia();
       if (text) void commitVoiceTranscript(text);
       else setVoicePhase("idle");
       return;
@@ -806,7 +756,6 @@ export default function Chat() {
       rec.stop?.();
     } catch {
       const text = buildFinalTranscriptText() || buildTranscriptText();
-      cleanupVoiceInputMedia();
       if (text) void commitVoiceTranscript(text);
       else setVoicePhase("idle");
     }
@@ -1098,10 +1047,6 @@ export default function Chat() {
         <div className="debug-row">
           <span>Voice mode</span>
           <strong>{VOICE_TRANSCRIPTION_MODE}</strong>
-        </div>
-        <div className="debug-row">
-          <span>Voice input</span>
-          <strong>{VOICE_TRANSCRIPTION_MODE === "browser" ? (browserUsingSharedAudioTrackRef.current ? "shared mic track" : "browser mic") : "backend audio"}</strong>
         </div>
         <div className="debug-row">
           <span>Last used model</span>
