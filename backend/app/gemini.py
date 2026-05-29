@@ -5,6 +5,11 @@ from typing import List, Dict, Any, Optional, Tuple
 from .prompts import SYSTEM_PROMPT_BASE
 from .retrieval import build_profile_context
 
+def _get_api_keys() -> List[str]:
+    """Retrieves and parses multiple API keys from the environment."""
+    keys_str = os.getenv("GEMINI_API_KEYS", os.getenv("GEMINI_API_KEY", ""))
+    return [k.strip() for k in keys_str.split(",") if k.strip()]
+
 def _guess_mime(audio_bytes: bytes, declared_mime: Optional[str] = None) -> str:
     if declared_mime and declared_mime.startswith("audio/"):
         return declared_mime.split(";")[0]
@@ -21,8 +26,6 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     if app_mode == "quota_saver":
         return (
             [
-                # Use only Gemini models here. Gemma models currently return
-                # 400 INVALID_ARGUMENT when a system/developer instruction is provided.
                 "gemini-2.5-flash-lite",
                 "gemini-2.0-flash-lite",
                 "gemini-2.0-flash",
@@ -59,7 +62,6 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     )
 
 TRANSCRIBE_MODEL_CANDIDATES = [
-    # Model codes per Gemini API docs.
     "gemini-2.5-flash-native-audio-preview-12-2025",
     "gemini-2.5-flash-native-audio-preview-09-2025",
     "gemini-2.0-flash",
@@ -67,12 +69,6 @@ TRANSCRIBE_MODEL_CANDIDATES = [
 ]
 
 def build_gemini_history(messages: List[Dict[str, Any]], history_turns: int) -> List[Dict[str, Any]]:
-    """Build Gemini `contents` history.
-
-    Gemini multi-turn works best when the FIRST turn is from the user.
-    The UI includes an initial assistant greeting; if sent first, Gemini may reject.
-    We also merge consecutive same-role messages to reduce token overhead.
-    """
     raw: List[Tuple[str, str]] = []
     for m in messages[-history_turns:]:
         role = "user" if m.get("role") == "user" else "model"
@@ -81,17 +77,15 @@ def build_gemini_history(messages: List[Dict[str, Any]], history_turns: int) -> 
             continue
         raw.append((role, text))
 
-    # Merge consecutive same-role turns
     merged: List[Tuple[str, str]] = []
     for role, text in raw:
         if merged and merged[-1][0] == role:
-            merged[-1] = (role, merged[-1][1].rstrip() + "\\n" + text)
+            merged[-1] = (role, merged[-1][1].rstrip() + "\n" + text)
         else:
             merged.append((role, text))
 
     contents = [{"role": r, "parts": [{"text": t}]} for r, t in merged]
 
-    # Ensure first turn is user
     while contents and contents[0]["role"] != "user":
         contents.pop(0)
 
@@ -113,23 +107,43 @@ def strip_continue_token(t: str) -> str:
         return t[:-10].rstrip()
     return t
 
-def _generate_with_fallback(client, model_candidates: List[str], contents, config):
+def _generate_with_key_and_model_fallback(api_keys: List[str], model_candidates: List[str], contents, config):
+    """
+    Loops through available keys. If a quota error (429) happens, it switches to the next key.
+    If a model fails for another reason, it switches to the next model using the same key.
+    """
     last_errors = []
     last_tried = None
-    for m in model_candidates:
+
+    from google import genai
+
+    for key in api_keys:
         try:
-            last_tried = m
-            resp = client.models.generate_content(model=m, contents=contents, config=config)
-            return resp, m, last_tried, last_errors
+            client = genai.Client(api_key=key)
         except Exception as e:
-            last_errors.append(f"{m}: {repr(e)}")
+            last_errors.append(f"Init Error key(...{key[-4:]}): {repr(e)}")
             continue
-    raise RuntimeError(last_errors[-1] if last_errors else "All models failed")
+
+        for m in model_candidates:
+            try:
+                last_tried = m
+                resp = client.models.generate_content(model=m, contents=contents, config=config)
+                return resp, m, last_tried, last_errors
+            except Exception as e:
+                err_msg = str(e)
+                last_errors.append(f"Key(...{key[-4:]}) Model({m}): {err_msg}")
+                # If quota exhausted, break out of model loop to try the NEXT key
+                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                    break
+                # Otherwise, it might be a model availability issue, try the next model on the same key
+                continue
+
+    raise RuntimeError(last_errors[-1] if last_errors else "All keys and models failed")
 
 def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") -> Dict[str, Any]:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY")
+    api_keys = _get_api_keys()
+    if not api_keys:
+        raise RuntimeError("Missing GEMINI_API_KEYS environment variable.")
 
     try:
         from google import genai
@@ -137,19 +151,20 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     except Exception as exc:
         raise RuntimeError("google-genai is not installed or could not be imported.") from exc
 
-    client = genai.Client(api_key=api_key)
-
     candidates, max_output_tokens, max_hops, history_turns = _chat_mode_config(app_mode)
 
-    # Build a small system prompt + only the relevant profile facts for THIS question.
     last_user_text = ""
     for m in reversed(messages or []):
         if m.get("role") == "user" and (m.get("content") or "").strip():
             last_user_text = (m.get("content") or "").strip()
             break
 
+    # We use the first key just to initialize a client for embedding.
+    # If the first key's quota is dead, build_profile_context handles the failure gracefully with lexical search fallback.
+    embed_client = genai.Client(api_key=api_keys[0])
+
     facts_block = build_profile_context(
-        client=client,
+        client=embed_client,
         question_text=last_user_text,
         embed_model=os.getenv("PROFILE_EMBED_MODEL", "gemini-embedding-001"),
         output_dimensionality=int(os.getenv("PROFILE_EMBED_DIM", "256")),
@@ -175,7 +190,6 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     hist = build_gemini_history(messages, history_turns)
 
     if not hist:
-        # Fallback: ensure we always send at least one user message
         last_user = ""
         for m in reversed(messages or []):
             if m.get("role") == "user" and (m.get("content") or "").strip():
@@ -183,9 +197,14 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
                 break
         hist = [{"role": "user", "parts": [{"text": last_user or "Hello"}]}]
 
-    resp, used_model, last_tried, errors = _generate_with_fallback(client, candidates, hist, gen_config)
+    # 1st Generation pass with multi-key rotation
+    resp, used_model, last_tried, errors = _generate_with_key_and_model_fallback(
+        api_keys, candidates, hist, gen_config
+    )
+    
     bot_text = strip_continue_token((resp.text or "").strip()) or "I didn’t catch that fully — can you say it again?"
 
+    # Handling Continues / Multi-hops using the same multi-key rotation
     hops_used = 0
     for _ in range(max_hops):
         if not needs_continue(bot_text):
@@ -197,7 +216,9 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
             {"role": "user", "parts": [{"text": continue_prompt}]},
         ]
         try:
-            resp2, used_model2, last_tried2, errors2 = _generate_with_fallback(client, candidates, hist2, gen_config)
+            resp2, used_model2, last_tried2, errors2 = _generate_with_key_and_model_fallback(
+                api_keys, candidates, hist2, gen_config
+            )
             used_model = used_model2
             last_tried = last_tried2
             errors = errors + errors2
@@ -218,9 +239,9 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     }
 
 def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[str, Any]:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY")
+    api_keys = _get_api_keys()
+    if not api_keys:
+        raise RuntimeError("Missing GEMINI_API_KEYS environment variable.")
 
     if not audio_bytes or len(audio_bytes) < 1000:
         return {"text": "", "used_model": None}
@@ -231,22 +252,26 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
     except Exception as exc:
         raise RuntimeError("google-genai is not installed or could not be imported.") from exc
 
-    client = genai.Client(api_key=api_key)
     mime = _guess_mime(audio_bytes, declared_mime)
     prompt = "Transcribe the user's speech accurately. Return ONLY the transcript."
     config = types.GenerateContentConfig(temperature=0.0, max_output_tokens=512)
 
-    for m in TRANSCRIBE_MODEL_CANDIDATES:
-        try:
-            resp = client.models.generate_content(
-                model=m,
-                contents=[types.Part.from_bytes(data=audio_bytes, mime_type=mime), prompt],
-                config=config,
-            )
-            text = (resp.text or "").strip().strip('"').strip()
-            if text:
-                return {"text": text, "used_model": m}
-        except Exception:
-            continue
+    for key in api_keys:
+        client = genai.Client(api_key=key)
+        for m in TRANSCRIBE_MODEL_CANDIDATES:
+            try:
+                resp = client.models.generate_content(
+                    model=m,
+                    contents=[types.Part.from_bytes(data=audio_bytes, mime_type=mime), prompt],
+                    config=config,
+                )
+                text = (resp.text or "").strip().strip('"').strip()
+                if text:
+                    return {"text": text, "used_model": m}
+            except Exception as e:
+                err_msg = str(e)
+                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                    break # Break out of the model loop to try the next key
+                continue # Try next model with the same key
 
     return {"text": "", "used_model": None}

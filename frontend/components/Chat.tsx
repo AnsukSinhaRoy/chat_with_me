@@ -80,8 +80,8 @@ async function responseErrorMessage(response: Response, area: "chat" | "transcri
     );
   }
 
-  if (/Missing OPENAI_API_KEY/i.test(detail)) {
-    return "Backend is deployed, but OPENAI_API_KEY is missing in the backend environment variables.";
+  if (/Missing GEMINI_API_KEYS/i.test(detail)) {
+    return "Backend is deployed, but GEMINI_API_KEYS is missing in the backend environment variables. Please add it to your Vercel dashboard.";
   }
 
   if (response.status === 413) {
