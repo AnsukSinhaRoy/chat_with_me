@@ -1,6 +1,6 @@
 import os
 import hashlib
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 
 from google import genai
 from google.genai import types
@@ -8,7 +8,9 @@ from google.genai import types
 from .prompts import SYSTEM_PROMPT_BASE
 from .retrieval import build_profile_context
 
-def _guess_mime(audio_bytes: bytes) -> str:
+def _guess_mime(audio_bytes: bytes, declared_mime: Optional[str] = None) -> str:
+    if declared_mime and declared_mime.startswith("audio/"):
+        return declared_mime.split(";")[0]
     if audio_bytes[:4] == b"RIFF":
         return "audio/wav"
     if audio_bytes[:4] == b"OggS":
@@ -212,7 +214,7 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
         "history_sig": hashlib.sha1(str(hist).encode("utf-8")).hexdigest(),
     }
 
-def transcribe(audio_bytes: bytes) -> Dict[str, Any]:
+def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[str, Any]:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("Missing GEMINI_API_KEY")
@@ -221,7 +223,7 @@ def transcribe(audio_bytes: bytes) -> Dict[str, Any]:
         return {"text": "", "used_model": None}
 
     client = genai.Client(api_key=api_key)
-    mime = _guess_mime(audio_bytes)
+    mime = _guess_mime(audio_bytes, declared_mime)
     prompt = "Transcribe the user's speech accurately. Return ONLY the transcript."
     config = types.GenerateContentConfig(temperature=0.0, max_output_tokens=512)
 

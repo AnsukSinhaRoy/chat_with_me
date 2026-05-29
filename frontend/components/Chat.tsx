@@ -3,18 +3,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type Role = "user" | "assistant";
+type AppMode = "quota_saver" | "quality";
+type VoicePhase = "idle" | "requesting" | "recording" | "stopping" | "transcribing";
 
 type Message = {
   role: Role;
   content: string;
   ts: string;
 };
-
-// Helper to prevent TypeScript from widening string literals like "user" to `string`
-// when building arrays of messages (important for strict builds on Vercel).
-function makeMsg(role: Role, content: string): Message {
-  return { role, content, ts: hhmm() };
-}
 
 type ChatResponse = {
   reply: string;
@@ -24,6 +20,16 @@ type ChatResponse = {
   hops_used?: number;
 };
 
+type SpeechBuffer = {
+  final: string;
+  interim: string;
+};
+
+const WAVE_BAR_COUNT = 32;
+const MAX_TEXTAREA_PX = 160;
+const MAX_RECORDING_MS = 22_000;
+const SILENCE_STOP_MS = 1_150;
+
 function hhmm() {
   const d = new Date();
   const hh = String(d.getHours()).padStart(2, "0");
@@ -31,7 +37,33 @@ function hhmm() {
   return `${hh}:${mm}`;
 }
 
+function makeMsg(role: Role, content: string): Message {
+  return { role, content, ts: hhmm() };
+}
+
+function normalizeAppMode(value: unknown): AppMode {
+  return String(value || "").toLowerCase() === "quality" ? "quality" : "quota_saver";
+}
+
+function initialWaveLevels() {
+  return Array.from({ length: WAVE_BAR_COUNT }, (_, i) => 0.12 + ((i % 5) * 0.018));
+}
+
+function buildWaveLevels(rms: number) {
+  const level = Math.min(1, Math.max(0.05, rms * 13));
+  const now = Date.now() / 170;
+
+  return Array.from({ length: WAVE_BAR_COUNT }, (_, i) => {
+    const wave = 0.5 + 0.5 * Math.sin(now + i * 0.55);
+    const ripple = 0.5 + 0.5 * Math.sin(now * 0.7 + i * 0.24);
+    const mixed = level * (0.35 + wave * 0.45 + ripple * 0.2);
+    return Math.max(0.08, Math.min(1, mixed));
+  });
+}
+
 function pickVoice(): SpeechSynthesisVoice | null {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
+
   const voices = window.speechSynthesis.getVoices() || [];
   const maleHints = [
     "male",
@@ -48,45 +80,34 @@ function pickVoice(): SpeechSynthesisVoice | null {
     "google uk english male",
     "google us english",
   ];
-  const en = voices.filter((v) => /^en/i.test(v.lang));
-  const pool = en.length ? en : voices;
+  const englishVoices = voices.filter((v) => /^en/i.test(v.lang));
+  const pool = englishVoices.length ? englishVoices : voices;
   if (!pool.length) return null;
 
-  const found = pool.find((v) => {
-    const name = (v.name || "").toLowerCase();
-    const uri = (v.voiceURI || "").toLowerCase();
-    return maleHints.some((h) => name.includes(h) || uri.includes(h));
-  });
-  return found || pool[0];
+  return (
+    pool.find((v) => {
+      const name = (v.name || "").toLowerCase();
+      const uri = (v.voiceURI || "").toLowerCase();
+      return maleHints.some((hint) => name.includes(hint) || uri.includes(hint));
+    }) || pool[0]
+  );
 }
 
 function speak(text: string) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
 
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
   const voice = pickVoice();
-  const u = new SpeechSynthesisUtterance(text);
-  if (voice) u.voice = voice;
-  u.rate = 1.0;
-  u.pitch = 0.9;
-  window.speechSynthesis.speak(u);
+  if (voice) utterance.voice = voice;
+  utterance.rate = 1.0;
+  utterance.pitch = 0.9;
+  window.speechSynthesis.speak(utterance);
 }
 
 export default function Chat() {
-  /**
-   * Vercel-friendly default:
-   * - If NEXT_PUBLIC_API_BASE_URL is NOT set, we use same-origin requests ("/api/..."),
-   *   which works great with Vercel rewrites/proxies.
-   * - For local dev with a separate backend, set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-   */
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
-
-  // --- app mode (quota_saver vs quality) ---
-  type AppMode = "quota_saver" | "quality";
-  const DEFAULT_MODE: AppMode =
-    ((process.env.NEXT_PUBLIC_APP_MODE as AppMode) || "quota_saver").toLowerCase() === "quality"
-      ? "quality"
-      : "quota_saver";
+  const DEFAULT_MODE = normalizeAppMode(process.env.NEXT_PUBLIC_APP_MODE);
 
   const [appMode, setAppMode] = useState<AppMode>(DEFAULT_MODE);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
@@ -98,13 +119,85 @@ export default function Chat() {
       "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever."
     ),
   ]);
+  const messagesRef = useRef<Message[]>(messages);
 
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-
-  // Auto-growing prompt input (ChatGPT/Gemini style)
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const MAX_TEXTAREA_PX = 160; // grows until this, then becomes scrollable
+
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debug, setDebug] = useState<ChatResponse | null>(null);
+
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>("idle");
+  const [voiceError, setVoiceError] = useState("");
+  const [transcriptPreview, setTranscriptPreview] = useState("");
+  const [waveLevels, setWaveLevels] = useState<number[]>(initialWaveLevels);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const waveformRafRef = useRef<number | null>(null);
+  const maxRecTimerRef = useRef<number | null>(null);
+  const lastWavePaintRef = useRef(0);
+  const silenceSinceRef = useRef<number | null>(null);
+  const hadSpeechRef = useRef(false);
+  const recognitionRef = useRef<any>(null);
+  const transcriptRef = useRef<SpeechBuffer>({ final: "", interim: "" });
+
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const hasUserMessages = useMemo(() => messages.some((m) => m.role === "user"), [messages]);
+  const isVoiceActive = voicePhase !== "idle";
+
+  useEffect(() => {
+    try {
+      const saved = normalizeAppMode(window.localStorage.getItem("app_mode"));
+      setAppMode(saved);
+    } catch {
+      // Local storage can be blocked in private browser modes.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("app_mode", appMode);
+    } catch {
+      // Ignore storage failures; the app still works.
+    }
+  }, [appMode]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    window.speechSynthesis?.getVoices?.();
+  }, []);
+
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const menu = modeMenuRef.current;
+      if (menu && !menu.contains(event.target as Node)) setModeMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [modeMenuOpen]);
+
+  useEffect(() => {
+    autosizePrompt();
+  }, [input]);
+
+  useEffect(() => {
+    if (hasUserMessages) chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, busy, hasUserMessages]);
+
+  useEffect(() => {
+    return () => cleanupRecordingResources();
+  }, []);
 
   function focusPrompt() {
     inputRef.current?.focus();
@@ -113,133 +206,43 @@ export default function Chat() {
   function autosizePrompt() {
     const el = inputRef.current;
     if (!el) return;
-    // Reset height so scrollHeight is accurate, then clamp.
+
     el.style.height = "auto";
     const next = Math.min(el.scrollHeight, MAX_TEXTAREA_PX);
     el.style.height = `${next}px`;
     el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_PX ? "auto" : "hidden";
   }
 
-  const [debugOpen, setDebugOpen] = useState(false);
-  const [debug, setDebug] = useState<ChatResponse | null>(null);
-
-  // --- microphone recording ---
-  const [recording, setRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
-
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const vadRafRef = useRef<number | null>(null);
-  const maxRecTimerRef = useRef<number | null>(null);
-  const silenceSinceRef = useRef<number | null>(null);
-  const hadSpeechRef = useRef<boolean>(false);
-
-  // Web Speech API (Chrome) — used to auto-stop + produce a clearer transcript.
-  const recognitionRef = useRef<any>(null);
-  const transcriptRef = useRef<{ final: string; interim: string }>({ final: "", interim: "" });
-
-  // Helps async callbacks (like MediaRecorder.onstop) always use the latest messages.
-  const messagesRef = useRef<Message[]>(messages);
-
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
-
-  const hasUserMessages = useMemo(
-    () => messages.some((m) => m.role === "user"),
-    [messages]
-  );
-
-  // Load persisted mode (so the dropdown selection sticks)
-  useEffect(() => {
-    try {
-      const saved = (window.localStorage.getItem("app_mode") || "").toLowerCase();
-      if (saved === "quality" || saved === "quota_saver") setAppMode(saved);
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem("app_mode", appMode);
-    } catch {
-      // ignore
-    }
-  }, [appMode]);
-
-  // Close the mode menu on outside click
-  useEffect(() => {
-    if (!modeMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const el = modeMenuRef.current;
-      if (!el) return;
-      if (el.contains(e.target as Node)) return;
-      setModeMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [modeMenuOpen]);
-
-  useEffect(() => {
-    // ensure voices populate
-    window.speechSynthesis?.getVoices?.();
-  }, []);
-
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
-  useEffect(() => {
-    if (!hasUserMessages) return;
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, hasUserMessages]);
-
-  useEffect(() => {
-    // Keep the prompt height in sync with content.
-    autosizePrompt();
-  }, [input]);
-
-  useEffect(() => {
-    // When we're waiting on the assistant, keep the bottom in view.
-    if (busy && hasUserMessages) {
-      chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-  }, [busy, hasUserMessages]);
-
   async function callChat(nextMessages: Message[]) {
     setBusy(true);
     setDebug(null);
+
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: nextMessages,
-          app_mode: appMode,
-        }),
+        body: JSON.stringify({ messages: nextMessages, app_mode: appMode }),
       });
+
       if (!res.ok) {
         const txt = await res.text();
-        // Best-effort: backend usually returns {"detail": "..."}
-        let msg = txt;
+        let message = txt;
         try {
-          const j = JSON.parse(txt);
-          msg = j?.detail || j?.error || txt;
+          const parsed = JSON.parse(txt);
+          message = parsed?.detail || parsed?.error || txt;
         } catch {
-          // keep raw text
+          // Keep raw response text.
         }
-        throw new Error(String(msg));
+        throw new Error(String(message));
       }
-      const data: ChatResponse = await res.json();
 
-      const botMsg: Message = makeMsg("assistant", data.reply);
+      const data: ChatResponse = await res.json();
+      const botMsg = makeMsg("assistant", data.reply);
       setMessages((prev) => [...prev, botMsg]);
       setDebug(data);
-
-      // Speak after a user-initiated action (send/stop recording) to avoid autoplay blocks
       speak(data.reply);
-    } catch (e: any) {
-      const errMsg = (e?.message || "Request failed").toString().slice(0, 240);
+    } catch (error: any) {
+      const errMsg = String(error?.message || "Request failed").slice(0, 260);
       setMessages((prev) => [...prev, makeMsg("assistant", `⚠️ ${errMsg}`)]);
     } finally {
       setBusy(false);
@@ -248,17 +251,36 @@ export default function Chat() {
 
   async function sendText() {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || isVoiceActive) return;
+
     setInput("");
-    // height will reset via effect, but do it immediately for snappier UX
     requestAnimationFrame(() => autosizePrompt());
 
-    const next: Message[] = [...messagesRef.current, makeMsg("user", text)];
+    const next = [...messagesRef.current, makeMsg("user", text)];
+    setMessages(next);
+    await callChat(next);
+  }
+
+  async function sendVoiceTranscript(text: string) {
+    const clean = text.trim();
+    setVoicePhase("idle");
+    setTranscriptPreview("");
+
+    if (!clean) {
+      setVoiceError("I could not detect clear speech. Try again closer to the mic.");
+      return;
+    }
+
+    const next = [...messagesRef.current, makeMsg("user", clean)];
     setMessages(next);
     await callChat(next);
   }
 
   function newChat() {
+    cleanupRecordingResources();
+    setVoicePhase("idle");
+    setTranscriptPreview("");
+    setVoiceError("");
     setMessages([makeMsg("assistant", "Fresh slate. Hit me with your best interview question.")]);
     setDebug(null);
     setDebugOpen(false);
@@ -276,7 +298,6 @@ export default function Chat() {
 
   function fillPrompt(text: string) {
     setInput(text);
-    // focus + autosize for faster iteration
     requestAnimationFrame(() => {
       autosizePrompt();
       focusPrompt();
@@ -284,8 +305,6 @@ export default function Chat() {
   }
 
   function onPromptKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    // Enter to send, Shift+Enter for newline.
-    // Also avoid breaking IME composition.
     const isComposing = (e.nativeEvent as any)?.isComposing;
     if (e.key === "Enter" && !e.shiftKey && !isComposing) {
       e.preventDefault();
@@ -306,95 +325,108 @@ export default function Chat() {
     setModeMenuOpen(false);
   }
 
-  function cleanupRecording() {
-    if (vadRafRef.current) {
-      cancelAnimationFrame(vadRafRef.current);
-      vadRafRef.current = null;
+  function resetVoiceRefs() {
+    chunksRef.current = [];
+    silenceSinceRef.current = null;
+    hadSpeechRef.current = false;
+    transcriptRef.current = { final: "", interim: "" };
+  }
+
+  function stopWaveform() {
+    if (waveformRafRef.current != null) {
+      cancelAnimationFrame(waveformRafRef.current);
+      waveformRafRef.current = null;
     }
-    if (maxRecTimerRef.current) {
+    lastWavePaintRef.current = 0;
+    setWaveLevels(initialWaveLevels());
+  }
+
+  function cleanupRecordingResources() {
+    stopWaveform();
+
+    if (maxRecTimerRef.current != null) {
       window.clearTimeout(maxRecTimerRef.current);
       maxRecTimerRef.current = null;
     }
-    silenceSinceRef.current = null;
-    hadSpeechRef.current = false;
 
     try {
       recognitionRef.current?.stop?.();
     } catch {
-      // ignore
+      // Already stopped.
     }
     recognitionRef.current = null;
-    transcriptRef.current = { final: "", interim: "" };
 
     try {
-      audioCtxRef.current?.close?.();
+      if (audioCtxRef.current?.state !== "closed") audioCtxRef.current?.close?.();
     } catch {
-      // ignore
+      // Browser may already close it.
     }
     audioCtxRef.current = null;
 
     try {
-      streamRef.current?.getTracks?.().forEach((t) => t.stop());
+      streamRef.current?.getTracks?.().forEach((track) => track.stop());
     } catch {
-      // ignore
+      // Ignore device cleanup failures.
     }
     streamRef.current = null;
+    mediaRecorderRef.current = null;
+    resetVoiceRefs();
   }
 
   function stopRecording() {
-    if (!recording) return;
+    const recorder = mediaRecorderRef.current;
+    setVoicePhase("stopping");
+
     try {
       recognitionRef.current?.stop?.();
     } catch {
-      // ignore
+      // SpeechRecognition may already be stopped.
     }
+
     try {
-      const mr = mediaRecorderRef.current;
-      if (mr && mr.state === "recording") mr.stop();
+      if (recorder && recorder.state === "recording") recorder.stop();
+      else cleanupRecordingResources();
     } catch {
-      // ignore
+      cleanupRecordingResources();
+      setVoicePhase("idle");
     }
-    setRecording(false);
   }
 
   function startSpeechRecognitionIfAvailable() {
-    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) return;
 
     try {
-      const rec = new SR();
+      const rec = new SpeechRecognitionCtor();
       recognitionRef.current = rec;
-
-      // en-IN feels nicer for Indian English users; switch to en-US if you prefer.
       rec.lang = "en-IN";
       rec.interimResults = true;
       rec.continuous = true;
 
-      transcriptRef.current = { final: "", interim: "" };
-
       rec.onresult = (event: any) => {
         let interim = "";
         let final = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const res = event.results[i];
-          const txt = (res[0]?.transcript || "").toString();
-          if (res.isFinal) final += txt;
-          else interim += txt;
+
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
+          const result = event.results[i];
+          const text = String(result[0]?.transcript || "").trim();
+          if (!text) continue;
+          if (result.isFinal) final += ` ${text}`;
+          else interim += ` ${text}`;
         }
-        transcriptRef.current.final = (transcriptRef.current.final + " " + final).trim();
+
+        transcriptRef.current.final = `${transcriptRef.current.final} ${final}`.trim();
         transcriptRef.current.interim = interim.trim();
+        setTranscriptPreview(`${transcriptRef.current.final} ${transcriptRef.current.interim}`.trim());
       };
 
-      // Many Chrome builds fire onspeechend on pauses — we use it to auto-stop.
       rec.onspeechend = () => {
-        // Only stop after we've heard *something*
-        if ((transcriptRef.current.final || transcriptRef.current.interim).trim()) {
-          stopRecording();
-        }
+        const heardText = `${transcriptRef.current.final} ${transcriptRef.current.interim}`.trim();
+        if (heardText) stopRecording();
       };
 
       rec.onerror = () => {
-        // If speech recognition fails, we still have audio upload fallback.
+        // Backend transcription still runs from the recorded audio.
       };
 
       rec.start();
@@ -403,215 +435,357 @@ export default function Chat() {
     }
   }
 
-  function startSilenceAutoStop(analyser: AnalyserNode) {
+  function startWaveform(analyser: AnalyserNode) {
     const data = new Uint8Array(analyser.fftSize);
-    let noiseFloor = 0.01; // dynamic baseline
+    let noiseFloor = 0.01;
 
     const tick = () => {
       analyser.getByteTimeDomainData(data);
+
       let sum = 0;
-      for (let i = 0; i < data.length; i++) {
+      for (let i = 0; i < data.length; i += 1) {
         const v = (data[i] - 128) / 128;
         sum += v * v;
       }
-      const rms = Math.sqrt(sum / data.length);
 
-      // Adapt noise floor more when we haven't detected speech yet.
-      const alpha = hadSpeechRef.current ? 0.99 : 0.95;
+      const rms = Math.sqrt(sum / data.length);
+      const alpha = hadSpeechRef.current ? 0.99 : 0.94;
       noiseFloor = alpha * noiseFloor + (1 - alpha) * rms;
 
-      const threshold = Math.max(noiseFloor * 3.5, 0.012);
       const now = Date.now();
+      if (now - lastWavePaintRef.current > 65) {
+        lastWavePaintRef.current = now;
+        setWaveLevels(buildWaveLevels(rms));
+      }
 
-      if (rms > threshold) {
+      const speechThreshold = Math.max(noiseFloor * 3.3, 0.012);
+      if (rms > speechThreshold) {
         hadSpeechRef.current = true;
         silenceSinceRef.current = null;
       } else if (hadSpeechRef.current) {
         if (silenceSinceRef.current == null) silenceSinceRef.current = now;
-        if (now - (silenceSinceRef.current || now) > 900) {
+        if (now - silenceSinceRef.current > SILENCE_STOP_MS) {
           stopRecording();
           return;
         }
       }
 
-      vadRafRef.current = requestAnimationFrame(tick);
+      waveformRafRef.current = requestAnimationFrame(tick);
     };
 
-    vadRafRef.current = requestAnimationFrame(tick);
+    waveformRafRef.current = requestAnimationFrame(tick);
   }
 
   async function toggleRecording() {
     if (busy) return;
 
-    if (!recording) {
-      // Reset transcript buffers for this take
-      transcriptRef.current = { final: "", interim: "" };
+    if (voicePhase === "recording" || voicePhase === "requesting") {
+      stopRecording();
+      return;
+    }
 
-      // Capture with better defaults (clearer audio in most setups)
+    if (voicePhase === "stopping" || voicePhase === "transcribing") return;
+
+    setVoiceError("");
+    setTranscriptPreview("");
+    resetVoiceRefs();
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError("Your browser does not expose microphone capture. Use Chrome/Edge or type the question.");
+      return;
+    }
+
+    if (!(window as any).MediaRecorder) {
+      setVoiceError("This browser cannot record audio from the mic. Use Chrome/Edge for voice input.");
+      return;
+    }
+
+    setVoicePhase("requesting");
+
+    try {
       const rawStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
-        } as any,
+        } as MediaTrackConstraints,
       });
       streamRef.current = rawStream;
 
-      // Optional light processing (compression + gain) BEFORE recording.
-      const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
-      const audioCtx: AudioContext | null = AC ? new AC() : null;
+      const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
+      const audioCtx: AudioContext | null = AudioContextCtor ? new AudioContextCtor() : null;
       audioCtxRef.current = audioCtx;
 
-      let recordStream: MediaStream = rawStream;
+      let recordStream = rawStream;
       if (audioCtx) {
+        await audioCtx.resume?.();
         const source = audioCtx.createMediaStreamSource(rawStream);
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.82;
 
         const compressor = audioCtx.createDynamicsCompressor();
         compressor.threshold.setValueAtTime(-45, audioCtx.currentTime);
         compressor.knee.setValueAtTime(30, audioCtx.currentTime);
-        compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
-        compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
-        compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+        compressor.ratio.setValueAtTime(10, audioCtx.currentTime);
+        compressor.attack.setValueAtTime(0.004, audioCtx.currentTime);
+        compressor.release.setValueAtTime(0.22, audioCtx.currentTime);
 
         const gain = audioCtx.createGain();
-        gain.gain.setValueAtTime(1.18, audioCtx.currentTime);
+        gain.gain.setValueAtTime(1.16, audioCtx.currentTime);
 
-        const dest = audioCtx.createMediaStreamDestination();
-
+        const destination = audioCtx.createMediaStreamDestination();
+        source.connect(analyser);
         source.connect(compressor);
         compressor.connect(gain);
-        gain.connect(dest);
-
-        // analyser is for silence detection (auto-stop)
-        source.connect(analyser);
-        startSilenceAutoStop(analyser);
-
-        recordStream = dest.stream;
+        gain.connect(destination);
+        recordStream = destination.stream;
+        startWaveform(analyser);
       }
 
-      // Pick a good mime type when possible
-      const mimeCandidates = [
-        "audio/webm;codecs=opus",
-        "audio/webm",
-        "audio/ogg;codecs=opus",
-        "audio/ogg",
-      ];
-      const mimeType = mimeCandidates.find((t) => (window as any).MediaRecorder?.isTypeSupported?.(t));
-      const mr = mimeType
+      const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"];
+      const mimeType = mimeCandidates.find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType
         ? new MediaRecorder(recordStream, { mimeType, audioBitsPerSecond: 128000 })
         : new MediaRecorder(recordStream, { audioBitsPerSecond: 128000 });
 
-      mediaRecorderRef.current = mr;
+      mediaRecorderRef.current = recorder;
       chunksRef.current = [];
 
-      mr.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
       };
 
-      mr.onstop = async () => {
-        // stop devices + timers + audio context
-        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
-        const srText = transcriptRef.current.final.trim();
-        const srInterim = transcriptRef.current.interim.trim();
-        cleanupRecording();
+      recorder.onerror = () => {
+        setVoiceError("Recording failed. Check mic permission and try again.");
+        cleanupRecordingResources();
+        setVoicePhase("idle");
+      };
 
-        // Prefer Web Speech API transcript if available (usually clearer + already text)
-        const preferredText = (srText || srInterim).trim();
-        if (preferredText) {
-          const next: Message[] = [...messagesRef.current, makeMsg("user", preferredText)];
-          setMessages(next);
-          await callChat(next);
+      recorder.onstop = async () => {
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const browserTranscript = `${transcriptRef.current.final} ${transcriptRef.current.interim}`.trim();
+        cleanupRecordingResources();
+
+        setVoicePhase("transcribing");
+
+        if (browserTranscript) {
+          setTranscriptPreview(browserTranscript);
+          await sendVoiceTranscript(browserTranscript);
           return;
         }
 
-        // upload to backend for transcription
-        const form = new FormData();
-        form.append("file", blob, "audio.webm");
+        if (blob.size < 900) {
+          setVoicePhase("idle");
+          setVoiceError("That recording was too short or silent. Try again.");
+          return;
+        }
 
-        setBusy(true);
         try {
-          const tr = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
-          if (!tr.ok) throw new Error(await tr.text());
-          const data = (await tr.json()) as { text: string };
+          const form = new FormData();
+          form.append("file", blob, "voice.webm");
+          const response = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: form });
+          if (!response.ok) throw new Error(await response.text());
 
-          const userText = (data.text || "").trim() || "(Audio unclear)";
-          const next: Message[] = [...messagesRef.current, makeMsg("user", userText)];
-          setMessages(next);
-          await callChat(next);
+          const data = (await response.json()) as { text?: string };
+          const text = String(data.text || "").trim();
+          setTranscriptPreview(text);
+          await sendVoiceTranscript(text);
         } catch {
-          setMessages((prev) => [...prev, makeMsg("assistant", "Audio upload/transcribe failed — try again.")]);
-        } finally {
-          setBusy(false);
+          setVoicePhase("idle");
+          setVoiceError("Audio upload/transcription failed. The typed input still works.");
         }
       };
 
-      // Start browser speech recognition (if available) for auto-stop + cleaner text.
       startSpeechRecognitionIfAvailable();
+      recorder.start(250);
+      setVoicePhase("recording");
 
-      // Safety net: stop after 18s no matter what
-      maxRecTimerRef.current = window.setTimeout(() => {
-        stopRecording();
-      }, 18000);
-
-      mr.start();
-      setRecording(true);
-    } else {
-      stopRecording();
+      maxRecTimerRef.current = window.setTimeout(() => stopRecording(), MAX_RECORDING_MS);
+    } catch (error: any) {
+      cleanupRecordingResources();
+      setVoicePhase("idle");
+      const denied = String(error?.name || "").toLowerCase().includes("notallowed");
+      setVoiceError(denied ? "Microphone permission was denied." : "Could not start the microphone.");
     }
   }
 
-  const micLabel = recording ? "Stop recording" : "Start voice";
-  const sendLabel = "Send";
+  function renderModeSelector() {
+    return (
+      <div className="mode-wrap" ref={modeMenuRef}>
+        <button
+          className="mode-pill"
+          type="button"
+          onClick={() => setModeMenuOpen((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={modeMenuOpen}
+          title="Choose response mode"
+        >
+          <span className="mode-pill-label">{modeLabel(appMode)}</span>
+          <span className="mode-pill-chev" aria-hidden="true">
+            ▾
+          </span>
+        </button>
+
+        {modeMenuOpen ? (
+          <div className="mode-menu" role="menu" aria-label="Mode selection">
+            {(["quota_saver", "quality"] as AppMode[]).map((mode) => (
+              <button
+                key={mode}
+                className="mode-item"
+                role="menuitem"
+                onClick={() => setMode(mode)}
+                aria-checked={appMode === mode}
+              >
+                <div className="mode-item-text">
+                  <div className="mode-item-title">{modeLabel(mode)}</div>
+                  <div className="mode-item-sub">{modeSubtitle(mode)}</div>
+                </div>
+                {appMode === mode ? <div className="mode-check">✓</div> : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderVoiceStatus() {
+    if (!isVoiceActive && !voiceError && !transcriptPreview) return null;
+
+    const title =
+      voicePhase === "requesting"
+        ? "Requesting microphone…"
+        : voicePhase === "recording"
+          ? "Listening"
+          : voicePhase === "stopping"
+            ? "Finishing recording…"
+            : voicePhase === "transcribing"
+              ? "Transcribing"
+              : voiceError
+                ? "Voice input needs attention"
+                : "Transcript";
+
+    const subtitle =
+      voicePhase === "recording"
+        ? transcriptPreview || "Speak naturally. I’ll stop after a short pause."
+        : voicePhase === "transcribing"
+          ? transcriptPreview || "Converting speech to text…"
+          : voiceError || transcriptPreview;
+
+    return (
+      <div className={`voice-panel ${voiceError ? "has-error" : ""}`} aria-live="polite">
+        <div className="voice-panel-top">
+          <div>
+            <div className="voice-title">{title}</div>
+            {subtitle ? <div className="voice-subtitle">{subtitle}</div> : null}
+          </div>
+          {voicePhase === "recording" ? (
+            <button className="voice-stop-btn" type="button" onClick={stopRecording}>
+              Stop
+            </button>
+          ) : null}
+        </div>
+
+        {voicePhase === "recording" || voicePhase === "requesting" ? (
+          <div className="waveform" aria-hidden="true">
+            {waveLevels.map((level, i) => (
+              <span key={i} style={{ transform: `scaleY(${level})` }} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderComposer(extraClassName: string) {
+    const micLabel = voicePhase === "recording" ? "Stop recording" : "Start voice input";
+
+    return (
+      <div className={`composer ${extraClassName}`} aria-label="Message composer">
+        <div className={`composer-bar ${busy ? "is-busy" : ""} ${isVoiceActive ? "has-voice" : ""}`}>
+          {renderVoiceStatus()}
+
+          <textarea
+            id="prompt-input"
+            className="prompt-input"
+            placeholder={voicePhase === "recording" ? "Listening…" : "Ask anything…"}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onPromptKeyDown}
+            disabled={busy || isVoiceActive}
+            autoComplete="off"
+            rows={1}
+            ref={inputRef}
+          />
+
+          <div className="composer-actions-row" aria-label="Composer actions">
+            <div className="composer-actions-left">{renderModeSelector()}</div>
+            <div className="composer-actions-right">
+              <button
+                className={`icon-btn mic-btn ${voicePhase === "recording" ? "is-recording" : ""}`}
+                type="button"
+                onClick={toggleRecording}
+                aria-label={micLabel}
+                title={micLabel}
+                disabled={busy || voicePhase === "stopping" || voicePhase === "transcribing"}
+              >
+                {voicePhase === "recording" ? <span className="stop-glyph" /> : <span className="mic-glyph">🎤</span>}
+              </button>
+
+              <button
+                className="icon-btn send-btn"
+                type="button"
+                onClick={sendText}
+                aria-label="Send"
+                title="Send"
+                disabled={busy || isVoiceActive || !input.trim()}
+              >
+                {busy ? <span className="spinner" aria-hidden="true" /> : "➤"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="composer-hint">Enter to send • Shift+Enter for newline • Mic supports auto-stop</div>
+      </div>
+    );
+  }
 
   return (
     <div className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"}`}>
       {hasUserMessages ? (
         <>
           <div className="chat-actions">
-            <button onClick={newChat} className="ghost-btn">
+            <button onClick={newChat} className="ghost-btn" type="button">
               New chat
             </button>
-            <button onClick={exportJSON} className="ghost-btn">
+            <button onClick={exportJSON} className="ghost-btn" type="button">
               Export
             </button>
-            <button
-              onClick={() => setDebugOpen((v) => !v)}
-              className="ghost-btn"
-              style={{ marginLeft: "auto" }}
-            >
+            <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn debug-toggle" type="button">
               Debug
             </button>
           </div>
 
-          {debugOpen && (
+          {debugOpen ? (
             <div className="debug-panel">
               <div className="debug-line">APP_MODE: {appMode}</div>
               <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
               <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
-              {debug?.model_errors?.length ? (
-                <pre className="debug-pre">{debug.model_errors.join("\n")}</pre>
-              ) : null}
+              {debug?.model_errors?.length ? <pre className="debug-pre">{debug.model_errors.join("\n")}</pre> : null}
             </div>
-          )}
+          ) : null}
 
-          {/*
-            Full-width scroll area so the scrollbar sits on the extreme right edge of the screen.
-            Inner wrapper keeps chat content centered.
-          */}
           <div className="chat-scroll-outer">
             <div className="chat-scroll-inner">
               <div className="chat">
                 {messages.map((m, idx) => {
                   const isPending = busy && idx === messages.length - 1 && m.role === "user";
                   return (
-                    <div
-                      key={idx}
-                      className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}
-                    >
-                      {m.content}
+                    <div key={`${m.ts}-${idx}`} className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}>
+                      <div className="bubble-text">{m.content}</div>
                       <div className="meta">{m.ts}</div>
                     </div>
                   );
@@ -630,93 +804,13 @@ export default function Chat() {
                   </div>
                 ) : null}
 
-                {/* Spacer ensures the last message never sits behind the fixed composer */}
                 <div className="chat-bottom-spacer" aria-hidden="true" />
                 <div ref={chatEndRef} />
               </div>
             </div>
           </div>
 
-          <div className="composer composer-fixed" aria-label="Message composer">
-            <div className={`composer-bar ${busy ? "is-busy" : ""}`}>
-              <textarea
-                id="prompt-input"
-                className="prompt-input"
-                placeholder="Ask anything…"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={onPromptKeyDown}
-                disabled={busy}
-                autoComplete="off"
-                rows={1}
-                ref={inputRef}
-              />
-
-              <div className="composer-actions-row" aria-label="Composer actions">
-  <div className="composer-actions-left">
-    {/* Gemini-like mode dropdown */}
-              <div className="mode-wrap" ref={modeMenuRef}>
-                <button
-                  className="mode-pill"
-                  type="button"
-                  onClick={() => setModeMenuOpen((v) => !v)}
-                  aria-haspopup="menu"
-                  aria-expanded={modeMenuOpen}
-                  title="Choose response mode"
-                >
-                  <span className="mode-pill-label">{modeLabel(appMode)}</span>
-                  <span className="mode-pill-chev" aria-hidden="true">
-                    ▾
-                  </span>
-                </button>
-                {modeMenuOpen && (
-                  <div className="mode-menu" role="menu" aria-label="Mode selection">
-                    <button className="mode-item" role="menuitem" onClick={() => setMode("quota_saver")}
-                      aria-checked={appMode === "quota_saver"}
-                    >
-                      <div className="mode-item-text">
-                        <div className="mode-item-title">Quota saver</div>
-                        <div className="mode-item-sub">Answers quickly</div>
-                      </div>
-                      {appMode === "quota_saver" ? <div className="mode-check">✓</div> : null}
-                    </button>
-                    <button className="mode-item" role="menuitem" onClick={() => setMode("quality")}
-                      aria-checked={appMode === "quality"}
-                    >
-                      <div className="mode-item-text">
-                        <div className="mode-item-title">Quality</div>
-                        <div className="mode-item-sub">Best answers</div>
-                      </div>
-                      {appMode === "quality" ? <div className="mode-check">✓</div> : null}
-                    </button>
-                  </div>
-                )}
-              </div>
-  </div>
-  <div className="composer-actions-right">
-    <button
-                className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
-                onClick={toggleRecording}
-                aria-label={micLabel}
-                title={micLabel}
-                disabled={busy}
-              >
-                {recording ? "■" : "🎤"}
-              </button>
-    <button
-                className="icon-btn send-btn"
-                onClick={sendText}
-                aria-label={sendLabel}
-                title={sendLabel}
-                disabled={busy || !input.trim()}
-              >
-                {busy ? <span className="spinner" aria-hidden="true" /> : "➤"}
-              </button>
-  </div>
-</div>
-</div>
-            <div className="composer-hint">Enter to send • Mic for voice</div>
-          </div>
+          {renderComposer("composer-fixed")}
         </>
       ) : (
         <>
@@ -729,121 +823,28 @@ export default function Chat() {
               </p>
             </div>
 
-            <div className="composer composer-hero" aria-label="Message composer">
-              <div className={`composer-bar ${busy ? "is-busy" : ""}`}>
-                <textarea
-                  id="prompt-input"
-                  className="prompt-input"
-                  placeholder="Ask anything…"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={onPromptKeyDown}
-                  disabled={busy}
-                  autoComplete="off"
-                  rows={1}
-                  ref={inputRef}
-                />
-
-                <div className="composer-actions-row" aria-label="Composer actions">
-  <div className="composer-actions-left">
-    {/* Mode dropdown on landing too */}
-                <div className="mode-wrap" ref={modeMenuRef}>
-                  <button
-                    className="mode-pill"
-                    type="button"
-                    onClick={() => setModeMenuOpen((v) => !v)}
-                    aria-haspopup="menu"
-                    aria-expanded={modeMenuOpen}
-                    title="Choose response mode"
-                  >
-                    <span className="mode-pill-label">{modeLabel(appMode)}</span>
-                    <span className="mode-pill-chev" aria-hidden="true">
-                      ▾
-                    </span>
-                  </button>
-                  {modeMenuOpen && (
-                    <div className="mode-menu" role="menu" aria-label="Mode selection">
-                      <button className="mode-item" role="menuitem" onClick={() => setMode("quota_saver")}
-                        aria-checked={appMode === "quota_saver"}
-                      >
-                        <div className="mode-item-text">
-                          <div className="mode-item-title">Quota saver</div>
-                          <div className="mode-item-sub">Answers quickly</div>
-                        </div>
-                        {appMode === "quota_saver" ? <div className="mode-check">✓</div> : null}
-                      </button>
-                      <button className="mode-item" role="menuitem" onClick={() => setMode("quality")}
-                        aria-checked={appMode === "quality"}
-                      >
-                        <div className="mode-item-text">
-                          <div className="mode-item-title">Quality</div>
-                          <div className="mode-item-sub">Best answers</div>
-                        </div>
-                        {appMode === "quality" ? <div className="mode-check">✓</div> : null}
-                      </button>
-                    </div>
-                  )}
-                </div>
-  </div>
-  <div className="composer-actions-right">
-    <button
-                  className={`icon-btn mic-btn ${recording ? "is-recording" : ""}`}
-                  onClick={toggleRecording}
-                  aria-label={micLabel}
-                  title={micLabel}
-                  disabled={busy}
-                >
-                  {recording ? "■" : "🎤"}
-                </button>
-    <button
-                  className="icon-btn send-btn"
-                  onClick={sendText}
-                  aria-label={sendLabel}
-                  title={sendLabel}
-                  disabled={busy || !input.trim()}
-                >
-                  {busy ? <span className="spinner" aria-hidden="true" /> : "➤"}
-                </button>
-  </div>
-</div>
-</div>
-            </div>
+            {renderComposer("composer-hero")}
 
             <div className="hero-chips" aria-label="Quick prompts">
-              <button className="chip" onClick={() => fillPrompt("What should we know about your life story in a few sentences?")}
-              >
-                What should we know about your life story in a few sentences?
-              </button>
-              <button className="chip" onClick={() => fillPrompt("What’s your #1 superpower? ")}
-              >
-                What’s your #1 superpower?
-              </button>
-              <button className="chip" onClick={() => fillPrompt("What are the top 3 areas you’d like to grow in?")}
-              >
-                What are the top 3 areas you’d like to grow in?
-              </button>
-              <button className="chip" onClick={() => fillPrompt("What misconception do your coworkers have about you?")}
-              >
-                What misconception do your coworkers have about you?
-              </button>
+              <button className="chip" type="button" onClick={() => fillPrompt("What should we know about your life story in a few sentences?")}>What should we know about your life story in a few sentences?</button>
+              <button className="chip" type="button" onClick={() => fillPrompt("What’s your #1 superpower?")}>What’s your #1 superpower?</button>
+              <button className="chip" type="button" onClick={() => fillPrompt("What are the top 3 areas you’d like to grow in?")}>What are the top 3 areas you’d like to grow in?</button>
+              <button className="chip" type="button" onClick={() => fillPrompt("What misconception do your coworkers have about you?")}>What misconception do your coworkers have about you?</button>
             </div>
           </div>
 
-          {/* Keep debug reachable even on the landing screen */}
           <div className="landing-footer">
-            <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn">
+            <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn" type="button">
               Debug
             </button>
-            {debugOpen && (
-              <div className="debug-panel" style={{ marginTop: 10 }}>
+            {debugOpen ? (
+              <div className="debug-panel landing-debug-panel">
                 <div className="debug-line">APP_MODE: {appMode}</div>
                 <div className="debug-line">Last used chat model: {debug?.used_model || "-"}</div>
                 <div className="debug-line">Last tried model: {debug?.last_tried_model || "-"}</div>
-                {debug?.model_errors?.length ? (
-                  <pre className="debug-pre">{debug.model_errors.join("\n")}</pre>
-                ) : null}
+                {debug?.model_errors?.length ? <pre className="debug-pre">{debug.model_errors.join("\n")}</pre> : null}
               </div>
-            )}
+            ) : null}
           </div>
         </>
       )}

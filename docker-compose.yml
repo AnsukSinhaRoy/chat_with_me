@@ -4,15 +4,17 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - APP_MODE=quota_saver
-      - CORS_ORIGINS=http://localhost:3000
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      APP_MODE: ${APP_MODE:-quota_saver}
+      CORS_ORIGINS: http://localhost:3000
+      MAX_AUDIO_BYTES: ${MAX_AUDIO_BYTES:-12582912}
+
   web:
     build: ./frontend
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-      - NEXT_PUBLIC_APP_MODE=quota_saver
+      BACKEND_URL: http://api:8000
+      NEXT_PUBLIC_APP_MODE: ${APP_MODE:-quota_saver}
     depends_on:
       - api
