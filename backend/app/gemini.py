@@ -3,16 +3,15 @@ import hashlib
 import random
 from typing import List, Dict, Any, Optional, Tuple
 
-from .prompts import SYSTEM_PROMPT_BASE
-from .retrieval import build_profile_context
-
 # =====================================================================
 # VERCEL SERVERLESS OPTIMIZATION: GLOBAL STATE
-# This memory persists across requests on "warm" Vercel instances.
-# Both chat and audio endpoints share this memory to instantly skip 
-# keys that have exhausted their quotas, eliminating the "latency tax".
+# Shared memory for API keys. If a key dies (429 Quota), it is blacklisted
+# instantly for both text and audio routes, eliminating latency tax.
 # =====================================================================
 _dead_keys_memory = set()
+
+from .prompts import SYSTEM_PROMPT_BASE
+from .retrieval import build_profile_context
 
 def _get_api_keys() -> List[str]:
     """Retrieves and parses multiple API keys from the environment."""
@@ -20,23 +19,14 @@ def _get_api_keys() -> List[str]:
     return [k.strip() for k in keys_str.split(",") if k.strip()]
 
 def _guess_mime(audio_bytes: bytes, declared_mime: Optional[str] = None) -> str:
-    mime = "audio/wav"
+    # Safely extract the raw MIME type from the browser (e.g., audio/webm;codecs=opus -> audio/webm)
+    mime = "audio/webm"
     if declared_mime and "/" in declared_mime:
         mime = declared_mime.split(";")[0]
     elif audio_bytes[:4] == b"RIFF":
         mime = "audio/wav"
     elif audio_bytes[:4] == b"OggS":
         mime = "audio/ogg"
-    elif audio_bytes[:4] == b"\x1a\x45\xdf\xa3":
-        mime = "video/webm" 
-        
-    # FIX: Browsers send audio/webm or audio/mp4, which Gemini rejects.
-    # By mapping them to video equivalents, Gemini successfully extracts the audio.
-    if mime == "audio/webm":
-        mime = "video/webm"
-    elif mime == "audio/mp4":
-        mime = "video/mp4"
-        
     return mime
 
 def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
@@ -51,7 +41,6 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
         )
         
     if app_mode == "quality":
-        # Free-tier friendly models to avoid instant rate-limits
         return (
             ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"],
             1400,
@@ -59,20 +48,12 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
             10,
         )
         
-    # normal
     return (
         ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"],
         900,
         2,
         10,
     )
-
-# Stable flash models for audio ingestion
-TRANSCRIBE_MODEL_CANDIDATES = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-]
 
 def build_gemini_history(messages: List[Dict[str, Any]], history_turns: int) -> List[Dict[str, Any]]:
     raw: List[Tuple[str, str]] = []
@@ -120,13 +101,11 @@ def _generate_with_key_and_model_fallback(api_keys: List[str], model_candidates:
 
     from google import genai
 
-    # 1. Filter out dead keys
     alive_keys = [k for k in api_keys if k not in _dead_keys_memory]
     if not alive_keys:
-        _dead_keys_memory.clear() # All died, reset cache to try again
+        _dead_keys_memory.clear() 
         alive_keys = api_keys.copy()
 
-    # 2. Round-Robin Load Balancing
     random.shuffle(alive_keys)
 
     for key in alive_keys:
@@ -144,9 +123,7 @@ def _generate_with_key_and_model_fallback(api_keys: List[str], model_candidates:
             except Exception as e:
                 err_msg = str(e)
                 last_errors.append(f"Key(...{key[-4:]}) Model({m}): {err_msg}")
-                print(f"Chat Error [Key: ...{key[-4:]} | Model: {m}]: {err_msg}")
                 
-                # 3. Mark key as dead instantly if quota is hit
                 if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
                     _dead_keys_memory.add(key)
                     break 
@@ -174,7 +151,6 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
             last_user_text = (m.get("content") or "").strip()
             break
 
-    # Use a healthy key for embeddings to ensure RAG doesn't fail unnecessarily 
     alive_keys = [k for k in api_keys if k not in _dead_keys_memory]
     if not alive_keys:
         _dead_keys_memory.clear()
@@ -207,7 +183,6 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     )
 
     hist = build_gemini_history(messages, history_turns)
-
     if not hist:
         hist = [{"role": "user", "parts": [{"text": last_user_text or "Hello"}]}]
 
@@ -222,10 +197,9 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
         if not needs_continue(bot_text):
             break
         hops_used += 1
-        continue_prompt = "Continue exactly from where you left off. Do not repeat earlier text."
         hist2 = hist + [
             {"role": "model", "parts": [{"text": bot_text}]},
-            {"role": "user", "parts": [{"text": continue_prompt}]},
+            {"role": "user", "parts": [{"text": "Continue exactly from where you left off. Do not repeat earlier text."}]},
         ]
         try:
             resp2, used_model2, last_tried2, errors2 = _generate_with_key_and_model_fallback(
@@ -250,6 +224,7 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
         "history_sig": hashlib.sha1(str(hist).encode("utf-8")).hexdigest(),
     }
 
+
 def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[str, Any]:
     global _dead_keys_memory
     api_keys = _get_api_keys()
@@ -257,7 +232,9 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
     if not api_keys:
         raise RuntimeError("Missing GEMINI_API_KEYS environment variable.")
 
-    if not audio_bytes or len(audio_bytes) < 1000:
+    # FIX 1: Dropped file size limit from 1000 down to 50 bytes. 
+    # Browser Opus WebM aggressively compresses short 1-2 second clips. 
+    if not audio_bytes or len(audio_bytes) < 50:
         return {"text": "", "used_model": None}
 
     try:
@@ -267,17 +244,31 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
         raise RuntimeError("google-genai is not installed or could not be imported.") from exc
 
     mime = _guess_mime(audio_bytes, declared_mime)
-    prompt = "Transcribe the user's speech accurately. Return ONLY the transcript."
+    
+    # FIX 2: Explicit instructions. If Gemini hears nothing, it will output [NO_SPEECH] 
+    # so we can cleanly identify it rather than guessing.
+    prompt = (
+        "You are an expert transcription AI. Transcribe the user's speech accurately. "
+        "If there is only noise or silence, reply with exactly: [NO_SPEECH]"
+    )
     config = types.GenerateContentConfig(temperature=0.0, max_output_tokens=512)
 
-    # 1. Skip dead keys via shared memory
     alive_keys = [k for k in api_keys if k not in _dead_keys_memory]
     if not alive_keys:
         _dead_keys_memory.clear()
         alive_keys = api_keys.copy()
 
-    # 2. Round-Robin Load Balancing
     random.shuffle(alive_keys)
+
+    # FIX 3: 1.5-flash is prioritized. It handles raw browser audio better than 2.0/2.5.
+    audio_models = [
+        "gemini-1.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-2.5-flash"
+    ]
+    
+    last_errors = []
 
     for key in alive_keys:
         try:
@@ -285,7 +276,7 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
         except Exception:
             continue
             
-        for m in TRANSCRIBE_MODEL_CANDIDATES:
+        for m in audio_models:
             try:
                 resp = client.models.generate_content(
                     model=m,
@@ -293,16 +284,26 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
                     config=config,
                 )
                 text = (resp.text or "").strip().strip('"').strip()
+                
+                # Check for explicit silence marker
+                if "[NO_SPEECH]" in text.upper():
+                    return {"text": "", "used_model": m}
+                    
                 if text:
                     return {"text": text, "used_model": m}
+                    
+                last_errors.append(f"Model {m} returned empty response text.")
+                
             except Exception as e:
                 err_msg = str(e)
-                print(f"Transcribe Error [Key: ...{key[-4:]} | Model: {m} | MIME: {mime}]: {err_msg}")
+                last_errors.append(f"Key(...{key[-4:]}) Model({m}): {err_msg}")
                 
-                # 3. Instantly mark as dead so chat_reply avoids this key too!
                 if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
                     _dead_keys_memory.add(key)
                     break 
-                continue
+                continue 
 
-    return {"text": "", "used_model": None}
+    # FIX 4: If ALL keys and models fail, throw an actual 500 error!
+    # This prevents the UI from hiding API crashes behind a generic "Try again closer to the mic" message.
+    error_summary = " | ".join(last_errors[-3:]) if last_errors else "Unknown failure"
+    raise RuntimeError(f"Transcription completely failed. Last error: {error_summary}")
