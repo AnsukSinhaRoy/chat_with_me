@@ -2,21 +2,14 @@ const path = require("path");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  outputFileTracingRoot: path.join(__dirname),
-
-  /**
-   * Optional: proxy same-origin /api/* from the Next.js frontend to your backend.
-   * On Vercel, set BACKEND_URL to the backend deployment base URL.
-   */
-  async rewrites() {
-    const backend = process.env.BACKEND_URL;
-    if (!backend) return [];
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${backend}/api/:path*`,
-      },
-    ];
+  output: "export",
+  turbopack: {
+    root: path.join(__dirname),
+  },
+  experimental: {
+    // Disabling the separate webpack build worker avoids intermittent CI/Vercel hangs
+    // seen with this small static app on Next 15.x/Turbopack builds.
+    webpackBuildWorker: false,
   },
 };
 

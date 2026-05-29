@@ -50,6 +50,17 @@ PY
 
 Result: passed.
 
+
+## Vercel deployment fix
+
+The previous package failed on Vercel because the repository root had no `package.json`, while the actual Next.js app lived in `frontend/`. This version adds:
+
+- root `package.json` forwarding npm commands to `frontend/`,
+- root `vercel.json` with explicit install/build/output settings,
+- `frontend/vercel.json` for the cleaner Root Directory = `frontend` deployment path,
+- public npm registry configuration via `.npmrc`,
+- sanitized package locks without private/internal registry URLs.
+
 ## Remaining honest limitations
 
 - I did not test live Gemini chat/transcription because that requires a real `GEMINI_API_KEY` at runtime.

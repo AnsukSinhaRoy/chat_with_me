@@ -13,12 +13,13 @@
     "react-dom": "19.0.0"
   },
   "devDependencies": {
-    "@types/node": "25.2.0",
+    "@types/node": "20.19.0",
     "@types/react": "19.2.10",
     "cross-env": "^10.1.0",
     "typescript": "5.9.3"
   },
   "overrides": {
     "postcss": "8.5.10"
-  }
+  },
+  "packageManager": "npm@10.9.3"
 }

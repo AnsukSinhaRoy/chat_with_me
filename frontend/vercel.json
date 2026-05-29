@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "NEXT_TELEMETRY_DISABLED=1 NEXT_PRIVATE_BUILD_WORKER=0 node ./node_modules/next/dist/bin/next build --turbopack",
+  "outputDirectory": "out"
+}

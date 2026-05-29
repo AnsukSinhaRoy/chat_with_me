@@ -1,0 +1,22 @@
+{
+  "name": "chat-with-me",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI twin chat web app with a Next.js frontend and FastAPI backend.",
+  "scripts": {
+    "postinstall": "cd frontend && npm install",
+    "dev": "cd frontend && npm run dev",
+    "build": "node scripts/build-frontend.cjs",
+    "start": "cd frontend && npm run start",
+    "typecheck": "cd frontend && npx tsc --noEmit",
+    "frontend:install": "cd frontend && npm install",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "frontend:typecheck": "cd frontend && npm run typecheck"
+  },
+  "engines": {
+    "node": ">=20 <23",
+    "npm": ">=10"
+  },
+  "packageManager": "npm@10.9.3"
+}

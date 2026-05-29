@@ -30,6 +30,16 @@ frontend/
 
 ## Local development
 
+You can run npm commands either from `frontend/` or from the repository root. The root package forwards frontend commands so Vercel does not fail on `npm install`.
+
+```bash
+# from repo root
+npm install
+npm run typecheck
+npm run build
+```
+
+
 ### Backend
 
 ```bash
@@ -88,12 +98,11 @@ Commit the updated `profile_chunks.json` and `profile_index.json` together.
 
 ## Deployment notes
 
-### Recommended Vercel split
+### Vercel
 
-Create two Vercel projects from this repo:
+The repository now supports root-level Vercel deployment. The root `package.json` and `vercel.json` forward install/build commands to `frontend/`, so Vercel no longer fails with `npm install` at the repository root.
 
-1. Backend project: root directory `backend`, with `GEMINI_API_KEY`, `CORS_ORIGINS`, and `APP_MODE`.
-2. Frontend project: root directory `frontend`, with `BACKEND_URL` set to the backend deployment URL. The frontend proxies `/api/*` to the backend through `next.config.js`.
+Recommended setup: deploy the frontend with Root Directory `frontend`; deploy the backend separately, then set `NEXT_PUBLIC_API_BASE_URL` in the frontend deployment. This frontend is exported as a static site, so do not rely on Next.js rewrites for backend proxying on Vercel. See `VERCEL_DEPLOYMENT.md` for exact steps.
 
 ### Docker Compose
 
