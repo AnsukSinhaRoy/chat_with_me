@@ -1,24 +1,33 @@
 # Backend deployment
 
-This folder is a standalone FastAPI service for Vercel.
+Deploy this folder as a separate Vercel project.
 
-Vercel settings:
+Recommended Vercel settings:
 
-- Root Directory: `backend`
-- Install Command: leave blank / auto-detect
+- Root Directory: leave blank if uploading this backend-only zip, or `backend` if deploying the full repo
+- Framework Preset: Other
+- Install Command: leave blank
 - Build Command: leave blank
 - Output Directory: leave blank
 
-Required environment variables:
+Environment variables:
 
-```bash
-GEMINI_API_KEY=your_key_here
-CORS_ORIGINS=https://YOUR_FRONTEND_DOMAIN
+```text
+GEMINI_API_KEY=your_key
+CORS_ORIGINS=https://your-frontend-vercel-domain
 APP_MODE=quota_saver
 ```
 
-Health check:
+After deployment, check:
 
 ```text
-/healthz
+https://your-backend-domain/healthz
 ```
+
+Expected response:
+
+```json
+{"ok": true}
+```
+
+The Vercel entrypoint is `api/index.py`. Do not change the `functions` glob to `app/**/*.py`; Vercel's Python function configuration expects function files under `api/`.

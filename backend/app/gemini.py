@@ -2,9 +2,6 @@ import os
 import hashlib
 from typing import List, Dict, Any, Optional, Tuple
 
-from google import genai
-from google.genai import types
-
 from .prompts import SYSTEM_PROMPT_BASE
 from .retrieval import build_profile_context
 
@@ -116,7 +113,7 @@ def strip_continue_token(t: str) -> str:
         return t[:-10].rstrip()
     return t
 
-def _generate_with_fallback(client: genai.Client, model_candidates: List[str], contents, config):
+def _generate_with_fallback(client, model_candidates: List[str], contents, config):
     last_errors = []
     last_tried = None
     for m in model_candidates:
@@ -133,6 +130,12 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("Missing GEMINI_API_KEY")
+
+    try:
+        from google import genai
+        from google.genai import types
+    except Exception as exc:
+        raise RuntimeError("google-genai is not installed or could not be imported.") from exc
 
     client = genai.Client(api_key=api_key)
 
@@ -221,6 +224,12 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
 
     if not audio_bytes or len(audio_bytes) < 1000:
         return {"text": "", "used_model": None}
+
+    try:
+        from google import genai
+        from google.genai import types
+    except Exception as exc:
+        raise RuntimeError("google-genai is not installed or could not be imported.") from exc
 
     client = genai.Client(api_key=api_key)
     mime = _guess_mime(audio_bytes, declared_mime)
