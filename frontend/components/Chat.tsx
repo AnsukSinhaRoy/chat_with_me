@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 type Role = "user" | "assistant";
 type AppMode = "quota_saver" | "quality";
 type VoicePhase = "idle" | "requesting" | "recording" | "stopping" | "transcribing";
+type VoiceTranscriptionMode = "browser" | "backend";
 
 type Message = {
   role: Role;
@@ -31,9 +32,17 @@ const MAX_RECORDING_MS = 22_000;
 const SILENCE_STOP_MS = 1_150;
 
 const CONFIGURED_API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE_URL || "");
+const VOICE_TRANSCRIPTION_MODE = normalizeVoiceTranscriptionMode(process.env.NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE);
+const BROWSER_STT_LANG = process.env.NEXT_PUBLIC_BROWSER_STT_LANG || "en-IN";
+const REQUIRE_LOCAL_BROWSER_STT = process.env.NEXT_PUBLIC_BROWSER_STT_PROCESS_LOCALLY === "true";
+const USE_BROWSER_SPEECH_PREVIEW = process.env.NEXT_PUBLIC_USE_BROWSER_SPEECH_PREVIEW === "true";
 
 function normalizeApiBase(value: string) {
   return value.trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+}
+
+function normalizeVoiceTranscriptionMode(value: unknown): VoiceTranscriptionMode {
+  return String(value || "").toLowerCase() === "backend" ? "backend" : "browser";
 }
 
 function buildApiUrl(path: string) {
@@ -219,6 +228,8 @@ export default function Chat() {
   const hadSpeechRef = useRef(false);
   const recognitionRef = useRef<any>(null);
   const transcriptRef = useRef<SpeechBuffer>({ final: "", interim: "" });
+  const browserSpeechAutoStopTimerRef = useRef<number | null>(null);
+  const browserSpeechHadResultRef = useRef(false);
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -394,6 +405,7 @@ export default function Chat() {
     chunksRef.current = [];
     silenceSinceRef.current = null;
     hadSpeechRef.current = false;
+    browserSpeechHadResultRef.current = false;
     transcriptRef.current = { final: "", interim: "" };
   }
 
@@ -406,13 +418,21 @@ export default function Chat() {
     setWaveLevels(initialWaveLevels());
   }
 
-  function cleanupRecordingResources() {
-    stopWaveform();
-
+  function clearVoiceTimers() {
     if (maxRecTimerRef.current != null) {
       window.clearTimeout(maxRecTimerRef.current);
       maxRecTimerRef.current = null;
     }
+
+    if (browserSpeechAutoStopTimerRef.current != null) {
+      window.clearTimeout(browserSpeechAutoStopTimerRef.current);
+      browserSpeechAutoStopTimerRef.current = null;
+    }
+  }
+
+  function cleanupRecordingResources() {
+    stopWaveform();
+    clearVoiceTimers();
 
     try {
       recognitionRef.current?.stop?.();
@@ -457,46 +477,159 @@ export default function Chat() {
     }
   }
 
+  function getSpeechRecognitionCtor() {
+    if (typeof window === "undefined") return null;
+    return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
+  }
+
+  function buildTranscriptText() {
+    const { final, interim } = transcriptRef.current;
+    return `${final} ${interim}`.replace(/\s+/g, " ").trim();
+  }
+
+  function scheduleBrowserSpeechAutoStop(rec: any) {
+    if (browserSpeechAutoStopTimerRef.current != null) {
+      window.clearTimeout(browserSpeechAutoStopTimerRef.current);
+    }
+
+    browserSpeechAutoStopTimerRef.current = window.setTimeout(() => {
+      try {
+        rec.stop();
+      } catch {
+        // Already stopped by the browser.
+      }
+    }, SILENCE_STOP_MS);
+  }
+
+  function configureSpeechRecognitionHandlers(rec: any, submitOnEnd: boolean) {
+    rec.lang = BROWSER_STT_LANG;
+    rec.interimResults = true;
+    rec.continuous = true;
+
+    if (REQUIRE_LOCAL_BROWSER_STT && "processLocally" in rec) {
+      try {
+        rec.processLocally = true;
+      } catch {
+        // Older browsers expose the property but do not let it be assigned.
+      }
+    }
+
+    rec.onresult = (event: any) => {
+      let interim = "";
+      let final = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const text = String(result[0]?.transcript || "").trim();
+        if (!text) continue;
+        if (result.isFinal) final += ` ${text}`;
+        else interim += ` ${text}`;
+      }
+
+      browserSpeechHadResultRef.current = true;
+      transcriptRef.current.final = `${transcriptRef.current.final} ${final}`.replace(/\s+/g, " ").trim();
+      transcriptRef.current.interim = interim.replace(/\s+/g, " ").trim();
+      setTranscriptPreview(buildTranscriptText());
+      scheduleBrowserSpeechAutoStop(rec);
+    };
+
+    rec.onspeechend = () => {
+      scheduleBrowserSpeechAutoStop(rec);
+    };
+
+    rec.onerror = (event: any) => {
+      const code = String(event?.error || "").trim();
+      if (code && code !== "no-speech" && code !== "aborted") {
+        setVoiceError(`Browser speech recognition failed${code ? `: ${code}` : ""}. Try typing, or set NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE=backend.`);
+      }
+    };
+
+    rec.onend = async () => {
+      clearVoiceTimers();
+      recognitionRef.current = null;
+
+      if (!submitOnEnd) return;
+
+      const text = buildTranscriptText();
+      if (!text) {
+        setVoicePhase("idle");
+        setTranscriptPreview("");
+        setVoiceError(
+          browserSpeechHadResultRef.current
+            ? "The browser heard something but did not produce usable text. Try again closer to the mic."
+            : "I could not detect clear speech. Try again closer to the mic."
+        );
+        resetVoiceRefs();
+        return;
+      }
+
+      setTranscriptPreview(text);
+      await sendVoiceTranscript(text);
+    };
+  }
+
   function startSpeechRecognitionIfAvailable() {
-    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
     if (!SpeechRecognitionCtor) return;
 
     try {
       const rec = new SpeechRecognitionCtor();
       recognitionRef.current = rec;
-      rec.lang = "en-IN";
-      rec.interimResults = true;
-      rec.continuous = true;
-
-      rec.onresult = (event: any) => {
-        let interim = "";
-        let final = "";
-
-        for (let i = event.resultIndex; i < event.results.length; i += 1) {
-          const result = event.results[i];
-          const text = String(result[0]?.transcript || "").trim();
-          if (!text) continue;
-          if (result.isFinal) final += ` ${text}`;
-          else interim += ` ${text}`;
-        }
-
-        transcriptRef.current.final = `${transcriptRef.current.final} ${final}`.trim();
-        transcriptRef.current.interim = interim.trim();
-        setTranscriptPreview(`${transcriptRef.current.final} ${transcriptRef.current.interim}`.trim());
-      };
-
-      rec.onspeechend = () => {
-        const heardText = `${transcriptRef.current.final} ${transcriptRef.current.interim}`.trim();
-        if (heardText) stopRecording();
-      };
-
-      rec.onerror = () => {
-        // Backend transcription still runs from the recorded audio.
-      };
-
+      configureSpeechRecognitionHandlers(rec, false);
       rec.start();
     } catch {
       recognitionRef.current = null;
+    }
+  }
+
+  async function startBrowserSpeechInput() {
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor) {
+      setVoiceError("This browser does not support speech recognition. Use Chrome/Edge, type the question, or switch NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE=backend.");
+      setVoicePhase("idle");
+      return;
+    }
+
+    setVoicePhase("requesting");
+
+    try {
+      if (REQUIRE_LOCAL_BROWSER_STT && typeof SpeechRecognitionCtor.available === "function") {
+        const status = await SpeechRecognitionCtor.available({ langs: [BROWSER_STT_LANG], processLocally: true });
+        if (status === "downloadable" && typeof SpeechRecognitionCtor.install === "function") {
+          await SpeechRecognitionCtor.install({ langs: [BROWSER_STT_LANG], processLocally: true });
+        } else if (status === "unavailable") {
+          throw new Error(`On-device speech recognition is unavailable for ${BROWSER_STT_LANG} in this browser.`);
+        }
+      }
+
+      const rec = new SpeechRecognitionCtor();
+      recognitionRef.current = rec;
+      configureSpeechRecognitionHandlers(rec, true);
+      rec.start();
+      setVoicePhase("recording");
+      maxRecTimerRef.current = window.setTimeout(() => {
+        try {
+          rec.stop();
+        } catch {
+          // Already stopped by the browser.
+        }
+      }, MAX_RECORDING_MS);
+    } catch (error: unknown) {
+      clearVoiceTimers();
+      recognitionRef.current = null;
+      setVoicePhase("idle");
+      setVoiceError(error instanceof Error ? error.message : "Could not start browser speech recognition.");
+    }
+  }
+
+  function stopBrowserSpeechInput() {
+    setVoicePhase("stopping");
+    clearVoiceTimers();
+
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {
+      setVoicePhase("idle");
     }
   }
 
@@ -545,7 +678,8 @@ export default function Chat() {
     if (busy) return;
 
     if (voicePhase === "recording" || voicePhase === "requesting") {
-      stopRecording();
+      if (VOICE_TRANSCRIPTION_MODE === "browser") stopBrowserSpeechInput();
+      else stopRecording();
       return;
     }
 
@@ -554,6 +688,11 @@ export default function Chat() {
     setVoiceError("");
     setTranscriptPreview("");
     resetVoiceRefs();
+
+    if (VOICE_TRANSCRIPTION_MODE === "browser") {
+      await startBrowserSpeechInput();
+      return;
+    }
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setVoiceError("Your browser does not expose microphone capture. Use Chrome/Edge or type the question.");
@@ -630,16 +769,9 @@ export default function Chat() {
 
       recorder.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        const browserTranscript = `${transcriptRef.current.final} ${transcriptRef.current.interim}`.trim();
         cleanupRecordingResources();
 
         setVoicePhase("transcribing");
-
-        if (browserTranscript) {
-          setTranscriptPreview(browserTranscript);
-          await sendVoiceTranscript(browserTranscript);
-          return;
-        }
 
         if (blob.size < 900) {
           setVoicePhase("idle");
@@ -655,6 +787,13 @@ export default function Chat() {
 
           const data = (await response.json()) as { text?: string };
           const text = String(data.text || "").trim();
+
+          if (!text) {
+            setVoicePhase("idle");
+            setVoiceError("I could not detect clear speech. Try again closer to the mic.");
+            return;
+          }
+
           setTranscriptPreview(text);
           await sendVoiceTranscript(text);
         } catch (error: unknown) {
@@ -663,7 +802,7 @@ export default function Chat() {
         }
       };
 
-      startSpeechRecognitionIfAvailable();
+      if (USE_BROWSER_SPEECH_PREVIEW) startSpeechRecognitionIfAvailable();
       recorder.start(250);
       setVoicePhase("recording");
 
@@ -734,7 +873,10 @@ export default function Chat() {
 
     const subtitle =
       voicePhase === "recording"
-        ? transcriptPreview || "Speak naturally. I’ll stop after a short pause."
+        ? transcriptPreview ||
+          (VOICE_TRANSCRIPTION_MODE === "browser"
+            ? "Speak naturally. Browser speech-to-text sends text only; no audio is uploaded to your backend."
+            : "Speak naturally. I’ll stop after a short pause.")
         : voicePhase === "transcribing"
           ? transcriptPreview || "Converting speech to text…"
           : voiceError || transcriptPreview;
@@ -774,6 +916,10 @@ export default function Chat() {
         <div className="debug-row">
           <span>APP_MODE</span>
           <strong>{appMode}</strong>
+        </div>
+        <div className="debug-row">
+          <span>VOICE_TRANSCRIPTION_MODE</span>
+          <strong>{VOICE_TRANSCRIPTION_MODE}</strong>
         </div>
         <div className="debug-row">
           <span>Last used model</span>
@@ -837,7 +983,9 @@ export default function Chat() {
           </div>
         </div>
 
-        <div className="composer-hint">Enter to send • Shift+Enter for newline • Mic supports auto-stop</div>
+        <div className="composer-hint">
+          Enter to send • Shift+Enter for newline • Mic uses {VOICE_TRANSCRIPTION_MODE === "browser" ? "browser speech-to-text" : "backend transcription"}
+        </div>
       </div>
     );
   }
