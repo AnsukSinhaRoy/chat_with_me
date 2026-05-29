@@ -35,7 +35,7 @@ const CONFIGURED_API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE_UR
 const VOICE_TRANSCRIPTION_MODE = normalizeVoiceTranscriptionMode(process.env.NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE);
 const BROWSER_STT_LANG = process.env.NEXT_PUBLIC_BROWSER_STT_LANG || "en-IN";
 const REQUIRE_LOCAL_BROWSER_STT = process.env.NEXT_PUBLIC_BROWSER_STT_PROCESS_LOCALLY === "true";
-const USE_BROWSER_SPEECH_PREVIEW = process.env.NEXT_PUBLIC_USE_BROWSER_SPEECH_PREVIEW === "true";
+const AUTO_SEND_VOICE = process.env.NEXT_PUBLIC_AUTO_SEND_VOICE === "true";
 
 function normalizeApiBase(value: string) {
   return value.trim().replace(/\/+$/, "").replace(/\/api$/i, "");
@@ -146,50 +146,6 @@ function buildWaveLevels(rms: number) {
   });
 }
 
-function pickVoice(): SpeechSynthesisVoice | null {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
-
-  const voices = window.speechSynthesis.getVoices() || [];
-  const maleHints = [
-    "male",
-    "david",
-    "mark",
-    "alex",
-    "daniel",
-    "george",
-    "fred",
-    "roger",
-    "thomas",
-    "john",
-    "microsoft david",
-    "google uk english male",
-    "google us english",
-  ];
-  const englishVoices = voices.filter((v) => /^en/i.test(v.lang));
-  const pool = englishVoices.length ? englishVoices : voices;
-  if (!pool.length) return null;
-
-  return (
-    pool.find((v) => {
-      const name = (v.name || "").toLowerCase();
-      const uri = (v.voiceURI || "").toLowerCase();
-      return maleHints.some((hint) => name.includes(hint) || uri.includes(hint));
-    }) || pool[0]
-  );
-}
-
-function speak(text: string) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  const voice = pickVoice();
-  if (voice) utterance.voice = voice;
-  utterance.rate = 1.0;
-  utterance.pitch = 0.9;
-  window.speechSynthesis.speak(utterance);
-}
-
 export default function Chat() {
   const DEFAULT_MODE = normalizeAppMode(process.env.NEXT_PUBLIC_APP_MODE);
 
@@ -257,9 +213,6 @@ export default function Chat() {
     messagesRef.current = messages;
   }, [messages]);
 
-  useEffect(() => {
-    window.speechSynthesis?.getVoices?.();
-  }, []);
 
   useEffect(() => {
     if (!modeMenuOpen) return;
@@ -336,8 +289,32 @@ export default function Chat() {
     await callChat(next);
   }
 
-  async function sendVoiceTranscript(text: string) {
-    const clean = text.trim();
+  function appendVoiceTranscriptToPrompt(text: string) {
+    const clean = normalizeSpeechText(text);
+    setVoicePhase("idle");
+    setTranscriptPreview("");
+
+    if (!clean) {
+      setVoiceError("I could not detect clear speech. Try again closer to the mic.");
+      return false;
+    }
+
+    setInput((prev) => normalizeSpeechText(`${prev} ${clean}`));
+    requestAnimationFrame(() => {
+      autosizePrompt();
+      focusPrompt();
+    });
+    return true;
+  }
+
+  async function commitVoiceTranscript(text: string) {
+    const clean = normalizeSpeechText(text);
+
+    if (!AUTO_SEND_VOICE) {
+      appendVoiceTranscriptToPrompt(clean);
+      return;
+    }
+
     setVoicePhase("idle");
     setTranscriptPreview("");
 
@@ -359,11 +336,6 @@ export default function Chat() {
     setMessages([makeMsg("assistant", "Fresh slate. Hit me with your best interview question.")]);
     setDebug(null);
     setDebugOpen(false);
-    try {
-      window.speechSynthesis?.cancel?.();
-    } catch {
-      // Speech synthesis may not be available.
-    }
   }
 
   function exportJSON() {
@@ -486,8 +458,36 @@ export default function Chat() {
     return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
   }
 
+  function collapseRepeatedTrailingChunks(words: string[]) {
+    const out: string[] = [];
+
+    for (const word of words) {
+      out.push(word);
+
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const maxChunk = Math.floor(out.length / 2);
+
+        for (let size = maxChunk; size >= 1; size -= 1) {
+          const a = out.slice(out.length - size * 2, out.length - size).join(" ").toLowerCase();
+          const b = out.slice(out.length - size).join(" ").toLowerCase();
+
+          if (a && a === b) {
+            out.splice(out.length - size, size);
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+
+    return out;
+  }
+
   function normalizeSpeechText(text: string) {
-    return text.replace(/\s+/g, " ").trim();
+    const words = text.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    return collapseRepeatedTrailingChunks(words).join(" ").trim();
   }
 
   function orderedSegmentText(segments: Record<number, string>) {
@@ -523,8 +523,9 @@ export default function Chat() {
 
   function configureSpeechRecognitionHandlers(rec: any, submitOnEnd: boolean) {
     rec.lang = BROWSER_STT_LANG;
-    rec.interimResults = true;
-    rec.continuous = true;
+    rec.interimResults = false;
+    rec.continuous = false;
+    rec.maxAlternatives = 1;
 
     if (REQUIRE_LOCAL_BROWSER_STT && "processLocally" in rec) {
       try {
@@ -547,13 +548,10 @@ export default function Chat() {
         if (result.isFinal) {
           transcriptRef.current.finalSegments[i] = text;
           delete transcriptRef.current.interimSegments[i];
-        } else {
-          transcriptRef.current.interimSegments[i] = text;
         }
       }
 
       if (hasUsableResult) browserSpeechHadResultRef.current = true;
-      setTranscriptPreview(buildTranscriptText());
       scheduleBrowserSpeechAutoStop(rec);
     };
 
@@ -587,8 +585,7 @@ export default function Chat() {
         return;
       }
 
-      setTranscriptPreview(text);
-      await sendVoiceTranscript(text);
+      await commitVoiceTranscript(text);
     };
   }
 
@@ -818,15 +815,13 @@ export default function Chat() {
             return;
           }
 
-          setTranscriptPreview(text);
-          await sendVoiceTranscript(text);
+          await commitVoiceTranscript(text);
         } catch (error: unknown) {
           setVoicePhase("idle");
           setVoiceError(friendlyRequestError(error, "transcription"));
         }
       };
 
-      if (USE_BROWSER_SPEECH_PREVIEW) startSpeechRecognitionIfAvailable();
       recorder.start(250);
       setVoicePhase("recording");
 
@@ -897,12 +892,11 @@ export default function Chat() {
 
     const subtitle =
       voicePhase === "recording"
-        ? transcriptPreview ||
-          (VOICE_TRANSCRIPTION_MODE === "browser"
-            ? "Speak naturally. Browser speech-to-text sends text only; no audio is uploaded to your backend."
-            : "Speak naturally. I’ll stop after a short pause.")
+        ? VOICE_TRANSCRIPTION_MODE === "browser"
+          ? "Speak naturally, then pause or tap Stop. I’ll place the transcript in the text box for review."
+          : "Speak naturally. I’ll place the transcript in the text box for review."
         : voicePhase === "transcribing"
-          ? transcriptPreview || "Converting speech to text…"
+          ? "Converting speech to text…"
           : voiceError || transcriptPreview;
 
     return (
@@ -1012,7 +1006,7 @@ export default function Chat() {
         </div>
 
         <div className="composer-hint">
-          Enter to send • Shift+Enter for newline • Mic uses {VOICE_TRANSCRIPTION_MODE === "browser" ? "browser speech-to-text" : "backend transcription"}
+          Enter to send • Shift+Enter for newline • Mic fills the box for review
         </div>
       </div>
     );
@@ -1044,19 +1038,6 @@ export default function Chat() {
                   return (
                     <div key={`${m.ts}-${idx}`} className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}>
                       <div className="bubble-text">{m.content}</div>
-                      {m.role === "assistant" ? (
-                        <div className="bubble-actions">
-                          <button
-                            className="speak-btn"
-                            type="button"
-                            onClick={() => speak(m.content)}
-                            aria-label="Read this response aloud"
-                            title="Read this response aloud"
-                          >
-                            Speak
-                          </button>
-                        </div>
-                      ) : null}
                       <div className="meta">{m.ts}</div>
                     </div>
                   );

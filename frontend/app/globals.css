@@ -479,28 +479,6 @@ textarea:focus-visible{
 }
 
 
-.bubble-actions{
-  margin-top: 10px;
-  display: flex;
-  justify-content: flex-start;
-}
-
-.speak-btn{
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(255,255,255,0.06);
-  color: rgba(255,255,255,0.78);
-  font-size: 0.76rem;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.speak-btn:hover{
-  background: rgba(255,255,255,0.10);
-  color: rgba(255,255,255,0.92);
-}
-
 .meta{
   margin-top: 8px;
   color: var(--text-muted);
@@ -592,12 +570,15 @@ textarea:focus-visible{
 }
 
 .voice-panel{
+  width: 100%;
+  box-sizing: border-box;
   padding: 12px;
   border-radius: 20px;
   border: 1px solid rgba(0,230,184,0.20);
   background:
     radial-gradient(circle at 20% 0%, rgba(0,230,184,0.13), transparent 42%),
     rgba(255,255,255,0.045);
+  overflow: hidden;
 }
 
 .voice-panel.has-error{
@@ -612,6 +593,11 @@ textarea:focus-visible{
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.voice-panel-top > div:first-child{
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .voice-title{
@@ -897,7 +883,7 @@ textarea:focus-visible{
     height: 34px;
   }
   .voice-panel-top{
-    align-items: center;
+    align-items: flex-start;
   }
   .landing-debug-panel{
     left: 10px;
