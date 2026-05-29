@@ -22,8 +22,8 @@ type ChatResponse = {
 };
 
 type SpeechBuffer = {
-  final: string;
-  interim: string;
+  finalSegments: Record<number, string>;
+  interimSegments: Record<number, string>;
 };
 
 const WAVE_BAR_COUNT = 32;
@@ -227,7 +227,7 @@ export default function Chat() {
   const silenceSinceRef = useRef<number | null>(null);
   const hadSpeechRef = useRef(false);
   const recognitionRef = useRef<any>(null);
-  const transcriptRef = useRef<SpeechBuffer>({ final: "", interim: "" });
+  const transcriptRef = useRef<SpeechBuffer>({ finalSegments: {}, interimSegments: {} });
   const browserSpeechAutoStopTimerRef = useRef<number | null>(null);
   const browserSpeechHadResultRef = useRef(false);
 
@@ -316,7 +316,6 @@ export default function Chat() {
       const botMsg = makeMsg("assistant", data.reply);
       setMessages((prev) => [...prev, botMsg]);
       setDebug(data);
-      speak(data.reply);
     } catch (error: unknown) {
       const errMsg = friendlyRequestError(error, "chat").slice(0, 520);
       setMessages((prev) => [...prev, makeMsg("assistant", `⚠️ ${errMsg}`)]);
@@ -360,6 +359,11 @@ export default function Chat() {
     setMessages([makeMsg("assistant", "Fresh slate. Hit me with your best interview question.")]);
     setDebug(null);
     setDebugOpen(false);
+    try {
+      window.speechSynthesis?.cancel?.();
+    } catch {
+      // Speech synthesis may not be available.
+    }
   }
 
   function exportJSON() {
@@ -406,7 +410,7 @@ export default function Chat() {
     silenceSinceRef.current = null;
     hadSpeechRef.current = false;
     browserSpeechHadResultRef.current = false;
-    transcriptRef.current = { final: "", interim: "" };
+    transcriptRef.current = { finalSegments: {}, interimSegments: {} };
   }
 
   function stopWaveform() {
@@ -482,9 +486,25 @@ export default function Chat() {
     return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
   }
 
+  function normalizeSpeechText(text: string) {
+    return text.replace(/\s+/g, " ").trim();
+  }
+
+  function orderedSegmentText(segments: Record<number, string>) {
+    return Object.entries(segments)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([, text]) => text.trim())
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function buildFinalTranscriptText() {
+    return normalizeSpeechText(orderedSegmentText(transcriptRef.current.finalSegments));
+  }
+
   function buildTranscriptText() {
-    const { final, interim } = transcriptRef.current;
-    return `${final} ${interim}`.replace(/\s+/g, " ").trim();
+    const { finalSegments, interimSegments } = transcriptRef.current;
+    return normalizeSpeechText(`${orderedSegmentText(finalSegments)} ${orderedSegmentText(interimSegments)}`);
   }
 
   function scheduleBrowserSpeechAutoStop(rec: any) {
@@ -515,20 +535,24 @@ export default function Chat() {
     }
 
     rec.onresult = (event: any) => {
-      let interim = "";
-      let final = "";
+      let hasUsableResult = false;
 
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i];
-        const text = String(result[0]?.transcript || "").trim();
+        const text = normalizeSpeechText(String(result[0]?.transcript || ""));
         if (!text) continue;
-        if (result.isFinal) final += ` ${text}`;
-        else interim += ` ${text}`;
+
+        hasUsableResult = true;
+
+        if (result.isFinal) {
+          transcriptRef.current.finalSegments[i] = text;
+          delete transcriptRef.current.interimSegments[i];
+        } else {
+          transcriptRef.current.interimSegments[i] = text;
+        }
       }
 
-      browserSpeechHadResultRef.current = true;
-      transcriptRef.current.final = `${transcriptRef.current.final} ${final}`.replace(/\s+/g, " ").trim();
-      transcriptRef.current.interim = interim.replace(/\s+/g, " ").trim();
+      if (hasUsableResult) browserSpeechHadResultRef.current = true;
       setTranscriptPreview(buildTranscriptText());
       scheduleBrowserSpeechAutoStop(rec);
     };
@@ -550,7 +574,7 @@ export default function Chat() {
 
       if (!submitOnEnd) return;
 
-      const text = buildTranscriptText();
+      const text = buildFinalTranscriptText() || buildTranscriptText();
       if (!text) {
         setVoicePhase("idle");
         setTranscriptPreview("");
@@ -889,7 +913,11 @@ export default function Chat() {
             {subtitle ? <div className="voice-subtitle">{subtitle}</div> : null}
           </div>
           {voicePhase === "recording" ? (
-            <button className="voice-stop-btn" type="button" onClick={stopRecording}>
+            <button
+              className="voice-stop-btn"
+              type="button"
+              onClick={VOICE_TRANSCRIPTION_MODE === "browser" ? stopBrowserSpeechInput : stopRecording}
+            >
               Stop
             </button>
           ) : null}
@@ -914,11 +942,11 @@ export default function Chat() {
           <strong>{configuredApiLabel()}</strong>
         </div>
         <div className="debug-row">
-          <span>APP_MODE</span>
+          <span>App mode</span>
           <strong>{appMode}</strong>
         </div>
         <div className="debug-row">
-          <span>VOICE_TRANSCRIPTION_MODE</span>
+          <span>Voice mode</span>
           <strong>{VOICE_TRANSCRIPTION_MODE}</strong>
         </div>
         <div className="debug-row">
@@ -1002,7 +1030,7 @@ export default function Chat() {
               Export
             </button>
             <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn debug-toggle" type="button">
-              Debug
+              Status
             </button>
           </div>
 
@@ -1016,6 +1044,19 @@ export default function Chat() {
                   return (
                     <div key={`${m.ts}-${idx}`} className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}>
                       <div className="bubble-text">{m.content}</div>
+                      {m.role === "assistant" ? (
+                        <div className="bubble-actions">
+                          <button
+                            className="speak-btn"
+                            type="button"
+                            onClick={() => speak(m.content)}
+                            aria-label="Read this response aloud"
+                            title="Read this response aloud"
+                          >
+                            Speak
+                          </button>
+                        </div>
+                      ) : null}
                       <div className="meta">{m.ts}</div>
                     </div>
                   );
@@ -1065,7 +1106,7 @@ export default function Chat() {
 
           <div className="landing-footer">
             <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn" type="button">
-              Debug
+              Status
             </button>
             {debugOpen ? renderDebugPanel("landing-debug-panel") : null}
           </div>

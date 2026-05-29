@@ -374,7 +374,7 @@ textarea:focus-visible{
 
 .debug-row{
   display: grid;
-  grid-template-columns: 135px minmax(0, 1fr);
+  grid-template-columns: 116px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
   color: rgba(255,255,255,0.74);
@@ -476,6 +476,29 @@ textarea:focus-visible{
   margin-right: auto;
   border-bottom-left-radius: 6px;
   background: linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0.03));
+}
+
+
+.bubble-actions{
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.speak-btn{
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.78);
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.speak-btn:hover{
+  background: rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.92);
 }
 
 .meta{
@@ -883,7 +906,7 @@ textarea:focus-visible{
     min-width: 0;
   }
   .debug-row{
-    grid-template-columns: 110px minmax(0, 1fr);
+    grid-template-columns: 86px minmax(0, 1fr);
   }
 }
 
