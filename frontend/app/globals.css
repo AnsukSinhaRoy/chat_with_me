@@ -756,9 +756,10 @@ textarea:focus-visible{
 
 .mode-menu{
   position: absolute;
-  right: 0;
+  left: 0;
+  right: auto;
   bottom: calc(100% + 12px);
-  width: 280px;
+  width: min(280px, calc(100vw - 36px));
   padding: 8px;
   border-radius: 16px;
   border: 1px solid rgba(255,255,255,0.14);

@@ -184,6 +184,8 @@ export default function Chat() {
   const hadSpeechRef = useRef(false);
   const recognitionRef = useRef<any>(null);
   const transcriptRef = useRef<SpeechBuffer>({ finalSegments: {}, interimSegments: {} });
+  const nextFinalSegmentIdRef = useRef(0);
+  const syntheticWaveformRafRef = useRef<number | null>(null);
   const browserSpeechAutoStopTimerRef = useRef<number | null>(null);
   const browserSpeechHadResultRef = useRef(false);
   const browserDoneRequestedRef = useRef(false);
@@ -395,9 +397,15 @@ export default function Chat() {
     browserSpeechHadResultRef.current = false;
     browserDoneRequestedRef.current = false;
     transcriptRef.current = { finalSegments: {}, interimSegments: {} };
+    nextFinalSegmentIdRef.current = 0;
   }
 
   function stopWaveform() {
+    if (syntheticWaveformRafRef.current != null) {
+      cancelAnimationFrame(syntheticWaveformRafRef.current);
+      syntheticWaveformRafRef.current = null;
+    }
+
     if (waveformRafRef.current != null) {
       cancelAnimationFrame(waveformRafRef.current);
       waveformRafRef.current = null;
@@ -541,7 +549,7 @@ export default function Chat() {
   function configureSpeechRecognitionHandlers(rec: any, submitOnEnd: boolean) {
     rec.lang = BROWSER_STT_LANG;
     rec.interimResults = false;
-    rec.continuous = true;
+    rec.continuous = false;
     rec.maxAlternatives = 1;
 
     if (REQUIRE_LOCAL_BROWSER_STT && "processLocally" in rec) {
@@ -563,7 +571,8 @@ export default function Chat() {
         hasUsableResult = true;
 
         if (result.isFinal) {
-          transcriptRef.current.finalSegments[i] = text;
+          transcriptRef.current.finalSegments[nextFinalSegmentIdRef.current] = text;
+          nextFinalSegmentIdRef.current += 1;
           delete transcriptRef.current.interimSegments[i];
         }
       }
@@ -643,6 +652,24 @@ export default function Chat() {
     }
   }
 
+  function startSyntheticWaveformPreview() {
+    stopWaveform();
+
+    const tick = () => {
+      const now = Date.now() / 165;
+      setWaveLevels(
+        Array.from({ length: WAVE_BAR_COUNT }, (_, i) => {
+          const wave = 0.5 + 0.5 * Math.sin(now + i * 0.62);
+          const pulse = 0.5 + 0.5 * Math.sin(now * 0.63 + i * 0.28);
+          return Math.max(0.12, Math.min(1, 0.18 + wave * 0.48 + pulse * 0.18));
+        })
+      );
+      syntheticWaveformRafRef.current = requestAnimationFrame(tick);
+    };
+
+    syntheticWaveformRafRef.current = requestAnimationFrame(tick);
+  }
+
   async function startBrowserWaveformPreview() {
     if (!navigator.mediaDevices?.getUserMedia) return;
 
@@ -692,11 +719,10 @@ export default function Chat() {
         }
       }
 
-      try {
-        await startBrowserWaveformPreview();
-      } catch {
-        // Speech recognition can still work even if the visualizer cannot access Web Audio.
-      }
+      // In browser-STT mode, do not open a second getUserMedia microphone stream for the waveform.
+      // Mobile browsers often let the visualizer access the mic while SpeechRecognition then returns no transcript.
+      // This animated waveform keeps the UI feedback without competing with SpeechRecognition for audio capture.
+      startSyntheticWaveformPreview();
 
       const rec = new SpeechRecognitionCtor();
       recognitionRef.current = rec;
