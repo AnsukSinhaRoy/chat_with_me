@@ -1,60 +1,60 @@
-# Vercel deployment guide
+# Vercel deployment
 
-Do **not** deploy the repository root as the backend. This project contains two different apps. Deploy them as two separate Vercel projects.
+Deploy the frontend and backend as **two separate Vercel projects**. Do not deploy the repository root as a single mixed project.
 
 ## Frontend project
 
-Vercel settings:
+Use these Vercel settings:
 
-- Root Directory: `frontend`
-- Install Command: `npm install`
-- Build Command: `npm run build`
-- Output Directory: `out`
+```text
+Root Directory: frontend
+Install Command: npm install
+Build Command: NEXT_TELEMETRY_DISABLED=1 NEXT_PRIVATE_BUILD_WORKER=0 node ./node_modules/next/dist/bin/next build --turbopack
+Output Directory: out
+```
 
-Environment variable:
+Set:
 
-```bash
-NEXT_PUBLIC_API_BASE_URL=https://YOUR_BACKEND_DOMAIN
+```text
+NEXT_PUBLIC_API_BASE_URL=https://your-backend-vercel-domain
 ```
 
 ## Backend project
 
-Vercel settings:
+Use these Vercel settings:
 
-- Root Directory: `backend`
-- Framework Preset: FastAPI / Other
-- Install Command: leave blank so Vercel auto-installs from `requirements.txt`
-- Build Command: leave blank
-- Output Directory: leave blank
+```text
+Root Directory: backend
+Framework Preset: Other
+Install Command: leave blank
+Build Command: leave blank
+Output Directory: leave blank
+```
 
-Environment variables:
+Set:
 
-```bash
-GEMINI_API_KEY=your_key_here
-CORS_ORIGINS=https://YOUR_FRONTEND_DOMAIN
+```text
+GEMINI_API_KEY=your_key
+CORS_ORIGINS=https://your-frontend-vercel-domain
 APP_MODE=quota_saver
 ```
 
-Health check after deployment:
+Backend Vercel entrypoint:
 
 ```text
-https://YOUR_BACKEND_DOMAIN/healthz
+backend/api/index.py
 ```
 
-Expected response:
+Do **not** use a `functions` glob like `app/**/*.py`. Vercel's Python function configuration expects function files under `api/`, so this project re-exports the FastAPI app from `api/index.py`.
+
+Smoke test after backend deployment:
+
+```text
+https://your-backend-vercel-domain/healthz
+```
+
+Expected:
 
 ```json
 {"ok": true}
 ```
-
-Then set `NEXT_PUBLIC_API_BASE_URL` in the frontend project to the backend domain and redeploy the frontend.
-
-## Why the previous backend deployment failed
-
-The previous package had root-level Vercel/NPM config intended for frontend deployment. When you tried to deploy the backend, Vercel still ran:
-
-```bash
-cd frontend && npm install
-```
-
-That is wrong for a Python/FastAPI backend. This version removes root-level Vercel/NPM config and makes `frontend/` and `backend/` independently deployable.
