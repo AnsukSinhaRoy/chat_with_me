@@ -1,9 +1,18 @@
 import os
 import hashlib
+import random
 from typing import List, Dict, Any, Optional, Tuple
 
 from .prompts import SYSTEM_PROMPT_BASE
 from .retrieval import build_profile_context
+
+# =====================================================================
+# VERCEL SERVERLESS OPTIMIZATION: GLOBAL STATE
+# This memory persists across requests on "warm" Vercel instances.
+# Both chat and audio endpoints share this memory to instantly skip 
+# keys that have exhausted their quotas, eliminating the "latency tax".
+# =====================================================================
+_dead_keys_memory = set()
 
 def _get_api_keys() -> List[str]:
     """Retrieves and parses multiple API keys from the environment."""
@@ -11,61 +20,58 @@ def _get_api_keys() -> List[str]:
     return [k.strip() for k in keys_str.split(",") if k.strip()]
 
 def _guess_mime(audio_bytes: bytes, declared_mime: Optional[str] = None) -> str:
-    if declared_mime and declared_mime.startswith("audio/"):
-        return declared_mime.split(";")[0]
-    if audio_bytes[:4] == b"RIFF":
-        return "audio/wav"
-    if audio_bytes[:4] == b"OggS":
-        return "audio/ogg"
-    if audio_bytes[:4] == b"\x1a\x45\xdf\xa3":
-        return "audio/webm"
-    return "audio/wav"
+    mime = "audio/wav"
+    if declared_mime and "/" in declared_mime:
+        mime = declared_mime.split(";")[0]
+    elif audio_bytes[:4] == b"RIFF":
+        mime = "audio/wav"
+    elif audio_bytes[:4] == b"OggS":
+        mime = "audio/ogg"
+    elif audio_bytes[:4] == b"\x1a\x45\xdf\xa3":
+        mime = "video/webm" 
+        
+    # FIX: Browsers send audio/webm or audio/mp4, which Gemini rejects.
+    # By mapping them to video equivalents, Gemini successfully extracts the audio.
+    if mime == "audio/webm":
+        mime = "video/webm"
+    elif mime == "audio/mp4":
+        mime = "video/mp4"
+        
+    return mime
 
 def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int]:
     app_mode = (app_mode or "quota_saver").lower()
+    
     if app_mode == "quota_saver":
         return (
-            [
-                "gemini-2.5-flash-lite",
-                "gemini-2.0-flash-lite",
-                "gemini-2.0-flash",
-                "gemini-2.5-flash",
-            ],
+            ["gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"],
             512,  # max_output_tokens
             1,    # max_hops
             6,    # history_turns
         )
+        
     if app_mode == "quality":
+        # Free-tier friendly models to avoid instant rate-limits
         return (
-            [
-                "gemini-2.5-pro",
-                "gemini-2.5-flash",
-                "gemini-2.0-flash-001",
-                "gemini-2.0-flash",
-            ],
+            ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"],
             1400,
             2,
             10,
         )
+        
     # normal
     return (
-        [
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash-001",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-        ],
+        ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"],
         900,
         2,
         10,
     )
 
+# Stable flash models for audio ingestion
 TRANSCRIBE_MODEL_CANDIDATES = [
-    "gemini-2.5-flash-native-audio-preview-12-2025",
-    "gemini-2.5-flash-native-audio-preview-09-2025",
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
 ]
 
 def build_gemini_history(messages: List[Dict[str, Any]], history_turns: int) -> List[Dict[str, Any]]:
@@ -108,20 +114,26 @@ def strip_continue_token(t: str) -> str:
     return t
 
 def _generate_with_key_and_model_fallback(api_keys: List[str], model_candidates: List[str], contents, config):
-    """
-    Loops through available keys. If a quota error (429) happens, it switches to the next key.
-    If a model fails for another reason, it switches to the next model using the same key.
-    """
+    global _dead_keys_memory
     last_errors = []
     last_tried = None
 
     from google import genai
 
-    for key in api_keys:
+    # 1. Filter out dead keys
+    alive_keys = [k for k in api_keys if k not in _dead_keys_memory]
+    if not alive_keys:
+        _dead_keys_memory.clear() # All died, reset cache to try again
+        alive_keys = api_keys.copy()
+
+    # 2. Round-Robin Load Balancing
+    random.shuffle(alive_keys)
+
+    for key in alive_keys:
         try:
             client = genai.Client(api_key=key)
         except Exception as e:
-            last_errors.append(f"Init Error key(...{key[-4:]}): {repr(e)}")
+            last_errors.append(f"Init Error: {repr(e)}")
             continue
 
         for m in model_candidates:
@@ -132,15 +144,18 @@ def _generate_with_key_and_model_fallback(api_keys: List[str], model_candidates:
             except Exception as e:
                 err_msg = str(e)
                 last_errors.append(f"Key(...{key[-4:]}) Model({m}): {err_msg}")
-                # If quota exhausted, break out of model loop to try the NEXT key
+                print(f"Chat Error [Key: ...{key[-4:]} | Model: {m}]: {err_msg}")
+                
+                # 3. Mark key as dead instantly if quota is hit
                 if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
-                    break
-                # Otherwise, it might be a model availability issue, try the next model on the same key
+                    _dead_keys_memory.add(key)
+                    break 
                 continue
 
     raise RuntimeError(last_errors[-1] if last_errors else "All keys and models failed")
 
 def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") -> Dict[str, Any]:
+    global _dead_keys_memory
     api_keys = _get_api_keys()
     if not api_keys:
         raise RuntimeError("Missing GEMINI_API_KEYS environment variable.")
@@ -159,9 +174,13 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
             last_user_text = (m.get("content") or "").strip()
             break
 
-    # We use the first key just to initialize a client for embedding.
-    # If the first key's quota is dead, build_profile_context handles the failure gracefully with lexical search fallback.
-    embed_client = genai.Client(api_key=api_keys[0])
+    # Use a healthy key for embeddings to ensure RAG doesn't fail unnecessarily 
+    alive_keys = [k for k in api_keys if k not in _dead_keys_memory]
+    if not alive_keys:
+        _dead_keys_memory.clear()
+        alive_keys = api_keys.copy()
+        
+    embed_client = genai.Client(api_key=random.choice(alive_keys))
 
     facts_block = build_profile_context(
         client=embed_client,
@@ -190,21 +209,14 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     hist = build_gemini_history(messages, history_turns)
 
     if not hist:
-        last_user = ""
-        for m in reversed(messages or []):
-            if m.get("role") == "user" and (m.get("content") or "").strip():
-                last_user = (m.get("content") or "").strip()
-                break
-        hist = [{"role": "user", "parts": [{"text": last_user or "Hello"}]}]
+        hist = [{"role": "user", "parts": [{"text": last_user_text or "Hello"}]}]
 
-    # 1st Generation pass with multi-key rotation
     resp, used_model, last_tried, errors = _generate_with_key_and_model_fallback(
         api_keys, candidates, hist, gen_config
     )
     
     bot_text = strip_continue_token((resp.text or "").strip()) or "I didn’t catch that fully — can you say it again?"
 
-    # Handling Continues / Multi-hops using the same multi-key rotation
     hops_used = 0
     for _ in range(max_hops):
         if not needs_continue(bot_text):
@@ -239,7 +251,9 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
     }
 
 def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[str, Any]:
+    global _dead_keys_memory
     api_keys = _get_api_keys()
+    
     if not api_keys:
         raise RuntimeError("Missing GEMINI_API_KEYS environment variable.")
 
@@ -256,8 +270,21 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
     prompt = "Transcribe the user's speech accurately. Return ONLY the transcript."
     config = types.GenerateContentConfig(temperature=0.0, max_output_tokens=512)
 
-    for key in api_keys:
-        client = genai.Client(api_key=key)
+    # 1. Skip dead keys via shared memory
+    alive_keys = [k for k in api_keys if k not in _dead_keys_memory]
+    if not alive_keys:
+        _dead_keys_memory.clear()
+        alive_keys = api_keys.copy()
+
+    # 2. Round-Robin Load Balancing
+    random.shuffle(alive_keys)
+
+    for key in alive_keys:
+        try:
+            client = genai.Client(api_key=key)
+        except Exception:
+            continue
+            
         for m in TRANSCRIBE_MODEL_CANDIDATES:
             try:
                 resp = client.models.generate_content(
@@ -270,8 +297,12 @@ def transcribe(audio_bytes: bytes, declared_mime: Optional[str] = None) -> Dict[
                     return {"text": text, "used_model": m}
             except Exception as e:
                 err_msg = str(e)
+                print(f"Transcribe Error [Key: ...{key[-4:]} | Model: {m} | MIME: {mime}]: {err_msg}")
+                
+                # 3. Instantly mark as dead so chat_reply avoids this key too!
                 if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
-                    break # Break out of the model loop to try the next key
-                continue # Try next model with the same key
+                    _dead_keys_memory.add(key)
+                    break 
+                continue
 
     return {"text": "", "used_model": None}
