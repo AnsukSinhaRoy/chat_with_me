@@ -13,7 +13,7 @@ Recommended Vercel settings:
 Environment variables:
 
 ```text
-GEMINI_API_KEY=your_key
+OPENAI_API_KEY=your_key
 CORS_ORIGINS=https://your-frontend-vercel-domain
 APP_MODE=quota_saver
 ```

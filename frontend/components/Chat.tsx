@@ -76,12 +76,12 @@ async function responseErrorMessage(response: Response, area: "chat" | "transcri
   if (response.status === 404) {
     return (
       "Backend route not found. This usually means the frontend is calling the wrong Vercel project/domain. " +
-      "Set NEXT_PUBLIC_API_BASE_URL to the backend domain, and confirm that BACKEND_URL/healthz returns {\"ok\":true}."
+      "Set NEXT_PUBLIC_API_BASE_URL to the backend domain, and confirm that the backend /healthz route returns {\"ok\":true}."
     );
   }
 
-  if (/Missing GEMINI_API_KEY/i.test(detail)) {
-    return "Backend is deployed, but GEMINI_API_KEY is missing in the backend environment variables.";
+  if (/Missing OPENAI_API_KEY/i.test(detail)) {
+    return "Backend is deployed, but OPENAI_API_KEY is missing in the backend environment variables.";
   }
 
   if (response.status === 413) {
@@ -609,7 +609,7 @@ export default function Chat() {
         startWaveform(analyser);
       }
 
-      const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"];
+      const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
       const mimeType = mimeCandidates.find((type) => MediaRecorder.isTypeSupported(type));
       const recorder = mimeType
         ? new MediaRecorder(recordStream, { mimeType, audioBitsPerSecond: 128000 })

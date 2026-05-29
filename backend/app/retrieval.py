@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,6 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 HERE = os.path.dirname(__file__)
 CHUNKS_PATH = os.path.join(HERE, "profile_chunks.json")
 INDEX_PATH = os.path.join(HERE, "profile_index.json")
+
+_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "has", "have",
+    "he", "i", "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "this",
+    "to", "was", "we", "what", "when", "where", "which", "who", "why", "with", "you", "your",
+}
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
@@ -33,50 +40,43 @@ def load_chunks() -> List[Dict[str, Any]]:
 
 @lru_cache(maxsize=1)
 def load_index() -> Optional[Dict[str, Any]]:
-    """Load precomputed embeddings index if it exists."""
+    """Load the legacy embedding index if it exists.
+
+    The Runtime no longer depends on this file. It is kept only so older
+    local tooling does not break if it imports load_index().
+    """
     if not os.path.exists(INDEX_PATH):
         return None
     with open(INDEX_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def _extract_vector(embed_result: Any) -> Optional[List[float]]:
-    """Extract a float vector from google-genai embed_content result.
+def _tokens(text: str) -> List[str]:
+    return [
+        token
+        for token in re.findall(r"[a-zA-Z0-9]+", (text or "").lower())
+        if len(token) > 2 and token not in _STOPWORDS
+    ]
 
-    The SDK response shape can vary a bit by version. We handle common shapes.
-    """
-    if embed_result is None:
-        return None
 
-    # dict-ish shapes
-    if isinstance(embed_result, dict):
-        if "embedding" in embed_result and isinstance(embed_result["embedding"], dict):
-            v = embed_result["embedding"].get("values")
-            if isinstance(v, list):
-                return [float(x) for x in v]
-        if "embeddings" in embed_result and isinstance(embed_result["embeddings"], list) and embed_result["embeddings"]:
-            e0 = embed_result["embeddings"][0]
-            if isinstance(e0, dict) and "values" in e0:
-                return [float(x) for x in e0["values"]]
+def _keyword_score(query_tokens: List[str], item: Dict[str, Any]) -> float:
+    title = item.get("title") or ""
+    text = item.get("text") or ""
+    haystack = f"{title} {text}".lower()
+    if not query_tokens:
+        return 0.0
+    score = 0.0
+    for token in query_tokens:
+        # Exact-ish keyword hits are sufficient because the profile corpus is tiny.
+        count = haystack.count(token)
+        if count:
+            score += 1.0 + min(count, 4) * 0.25
+    return score / max(len(query_tokens), 1)
 
-    # object shapes
-    if hasattr(embed_result, "embedding"):
-        emb = getattr(embed_result, "embedding")
-        if hasattr(emb, "values"):
-            return [float(x) for x in list(getattr(emb, "values"))]
-        if isinstance(emb, dict) and "values" in emb:
-            return [float(x) for x in emb["values"]]
 
-    if hasattr(embed_result, "embeddings"):
-        embs = getattr(embed_result, "embeddings")
-        if isinstance(embs, list) and embs:
-            e0 = embs[0]
-            if hasattr(e0, "values"):
-                return [float(x) for x in list(getattr(e0, "values"))]
-            if isinstance(e0, dict) and "values" in e0:
-                return [float(x) for x in e0["values"]]
-
-    return None
+def _always_include(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    important_ids = {"identity", "education", "current_role", "internship"}
+    return [item for item in items if item.get("id") in important_ids]
 
 
 def build_context_from_index(
@@ -86,6 +86,7 @@ def build_context_from_index(
     min_score: float = 0.15,
     max_chars: int = 2800,
 ) -> str:
+    """Legacy vector-index context builder retained for old scripts/tests."""
     items = index.get("items") or []
     scored: List[Tuple[float, Dict[str, Any]]] = []
     for it in items:
@@ -97,69 +98,55 @@ def build_context_from_index(
     scored.sort(key=lambda x: x[0], reverse=True)
 
     picked = [it for s, it in scored[:k] if s >= min_score]
-    if not picked:
-        return ""
+    return _format_blocks(picked, max_chars=max_chars)
 
+
+def _format_blocks(items: List[Dict[str, Any]], max_chars: int) -> str:
     blocks = []
-    for it in picked:
-        title = (it.get("title") or "").strip()
-        text = (it.get("text") or "").strip()
+    seen = set()
+    for item in items:
+        item_id = item.get("id") or item.get("title") or item.get("text")
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        title = (item.get("title") or "").strip()
+        text = (item.get("text") or "").strip()
         if not text:
             continue
-        if title:
-            blocks.append(f"### {title}\n{text}")
-        else:
-            blocks.append(text)
-
-    out = "\n\n".join(blocks).strip()
-    return out[:max_chars]
+        blocks.append(f"### {title}\n{text}" if title else text)
+    return "\n\n".join(blocks).strip()[:max_chars]
 
 
 def build_profile_context(
     *,
-    client,
     question_text: str,
-    embed_model: str = "gemini-embedding-001",
+    client: Any = None,
+    embed_model: str = "",
     output_dimensionality: int = 256,
-    k: int = 3,
-    min_score: float = 0.15,
+    k: int = 4,
+    min_score: float = 0.10,
     max_chars: int = 2800,
 ) -> str:
     """Return a short FACTS CONTEXT block relevant to the question.
 
-    Uses a precomputed on-disk index when available; otherwise returns empty.
-    (You can generate the index with backend/scripts/build_profile_index.py)
+    This version intentionally avoids a second paid embedding API call. The
+    profile corpus is small, so lexical matching is good enough and cheaper for
+    a Vercel deployment.
     """
-    idx = load_index()
-    if not idx:
-        return ""
-
     try:
-        # Query embedding (RETRIEVAL_QUERY)
-        from google.genai import types
-
-        q = (question_text or "").strip()
-        if not q:
-            return ""
-
-        def _try_embed(config_kwargs: Dict[str, Any]):
-            try:
-                cfg = types.EmbedContentConfig(**config_kwargs) if config_kwargs else None
-                return client.models.embed_content(model=embed_model, contents=q, config=cfg)
-            except TypeError:
-                # Some SDK versions may not support one of the config fields.
-                cfg = types.EmbedContentConfig() if config_kwargs else None
-                return client.models.embed_content(model=embed_model, contents=q, config=cfg)
-
-        # Prefer retrieval-aware embeddings + smaller vectors.
-        res = _try_embed({
-            "task_type": "RETRIEVAL_QUERY",
-            "output_dimensionality": output_dimensionality,
-        })
-        qvec = _extract_vector(res)
-        if not qvec:
-            return ""
-        return build_context_from_index(qvec, idx, k=k, min_score=min_score, max_chars=max_chars)
+        items = load_chunks()
     except Exception:
-        # Retrieval is a bonus; never break chat.
         return ""
+
+    query_tokens = _tokens(question_text)
+    scored = [(_keyword_score(query_tokens, item), item) for item in items]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+
+    picked: List[Dict[str, Any]] = []
+    picked.extend(_always_include(items)[:2])
+    picked.extend(item for score, item in scored if score >= min_score)
+
+    if not picked:
+        picked = _always_include(items)[:2] or items[:2]
+
+    return _format_blocks(picked[: max(k, 1) + 2], max_chars=max_chars)

@@ -2,7 +2,7 @@
 
 ## Current purpose
 
-This is a browser-based AI twin/chat application. The frontend is a Next.js app that supports typed and voice questions. The backend is a FastAPI service that sends chat requests and audio transcription requests to Gemini, optionally enriching prompts with facts selected from a local profile index.
+This is a browser-based AI twin/chat application. The frontend is a Next.js app that supports typed and voice questions. The backend is a FastAPI service that sends chat requests and audio transcription requests to OpenAI, optionally enriching prompts with facts selected from a local profile index.
 
 ## Important fixes made
 
@@ -63,6 +63,6 @@ The previous package failed on Vercel because the repository root had no `packag
 
 ## Remaining honest limitations
 
-- I did not test live Gemini chat/transcription because that requires a real `GEMINI_API_KEY` at runtime.
+- I did not test live OpenAI chat/transcription because that requires a real `OPENAI_API_KEY` at runtime.
 - I did not update `profile_chunks.json` content yet, because you said you will share detailed personal documents later.
 - Browser speech recognition support differs by browser. Chrome/Edge usually work best; Safari/Firefox may rely more on backend transcription.

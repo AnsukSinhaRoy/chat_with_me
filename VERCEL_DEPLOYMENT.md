@@ -34,7 +34,7 @@ Output Directory: leave blank
 Set:
 
 ```text
-GEMINI_API_KEY=your_key
+OPENAI_API_KEY=your_key
 CORS_ORIGINS=https://your-frontend-vercel-domain
 APP_MODE=quota_saver
 ```
@@ -85,4 +85,4 @@ For the frontend deployment, set this environment variable before building/redep
 NEXT_PUBLIC_API_BASE_URL=https://your-backend-domain
 ```
 
-Do not point `NEXT_PUBLIC_API_BASE_URL` to the frontend domain. If it is missing or wrong, the app will now show `Backend not configured`, `Backend offline`, or a clear 404/CORS/Gemini-key error instead of pretending to be online.
+Do not point `NEXT_PUBLIC_API_BASE_URL` to the frontend domain. If it is missing or wrong, the app will now show `Backend not configured`, `Backend offline`, or a clear 404/CORS/OpenAI-key error instead of pretending to be online.
