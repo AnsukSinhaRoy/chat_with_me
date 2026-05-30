@@ -547,11 +547,13 @@ html[data-theme="light"] .voice-wave-glyph span{
   position: fixed;
   left: 0;
   right: 0;
-  bottom: var(--keyboard-inset, 0px);
+  bottom: 0;
   z-index: 60;
   padding: 14px 16px max(var(--composer-bottom), env(safe-area-inset-bottom));
   background: linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,0.62));
-  transition: bottom 160ms ease, padding 160ms ease;
+  transform: translate3d(0, calc(var(--keyboard-inset, 0px) * -1), 0);
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), padding 180ms ease;
+  will-change: transform;
 }
 
 .composer-hero{
@@ -900,7 +902,113 @@ html[data-theme="light"] .voice-wave-glyph span{
   }
 }
 
+
+/* Mobile landing layout: keep the hero copy/prompts visually anchored while
+   the keyboard opens, and let prompt chips size themselves like desktop. */
+@media (max-width: 720px){
+  .hero-mode{
+    min-height: 0;
+  }
+
+  .hero-mode .hero{
+    width: 100%;
+    flex: 0 0 calc(100vh - 64px);
+    flex-basis: calc(100svh - 64px);
+    min-height: 560px;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 16px;
+    padding: 36px 14px calc(178px + env(safe-area-inset-bottom));
+    text-align: center;
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
+
+  .hero-mode .hero-copy{
+    width: 100%;
+    max-width: 560px;
+    margin: 0 auto 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .hero-mode .hero-kicker{
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .hero-mode .hero-title{
+    width: 100%;
+    margin-top: 16px;
+    text-align: center;
+    font-size: clamp(2rem, 9vw, 2.55rem);
+    line-height: 1.02;
+  }
+
+  .hero-mode .hero-subtitle{
+    max-width: 520px;
+    margin-top: 18px;
+    margin-left: auto;
+    margin-right: auto;
+    font-size: 0.96rem;
+    line-height: 1.45;
+    text-align: center;
+  }
+
+  .hero-mode .composer-hero{
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 75;
+    width: 100%;
+    padding: 14px 10px max(var(--composer-bottom), env(safe-area-inset-bottom));
+    transform: translate3d(0, calc(var(--keyboard-inset, 0px) * -1), 0);
+    animation: none;
+    will-change: transform;
+  }
+
+  .hero-mode .composer-hero .composer-bar{
+    width: 100%;
+    max-width: none;
+  }
+
+  .hero-mode .hero-chips{
+    width: 100%;
+    max-width: 560px;
+    max-height: none;
+    margin: 18px auto 0;
+    overflow: visible;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    justify-content: flex-start;
+    padding: 0;
+  }
+
+  .hero-mode .chip{
+    width: fit-content;
+    max-width: calc(100vw - 30px);
+    min-height: 0;
+    border-radius: 999px;
+    padding: 10px 14px;
+    text-align: center;
+    line-height: 1.28;
+    white-space: normal;
+  }
+}
+
 @media (max-width: 520px){
+  .hero-mode .hero{
+    flex: 0 0 calc(100vh - 58px);
+    flex-basis: calc(100svh - 58px);
+    min-height: 560px;
+    padding-top: 34px;
+    padding-bottom: calc(172px + env(safe-area-inset-bottom));
+  }
+
   .brand-subtitle{ display: none; }
   .brand-title{ font-size: 0.98rem; }
   .composer-hint{ display: none; }
@@ -1214,7 +1322,8 @@ button:active:not(:disabled),
 }
 
 .debug-panel{
-  animation: panelLift 220ms ease-out both;
+  transform-origin: top center;
+  animation: debugDropDown 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .mode-pill[aria-expanded="true"]{
@@ -1451,6 +1560,11 @@ button:active:not(:disabled),
 @keyframes panelLift{
   0%{ opacity: 0; transform: translateY(8px) scale(0.99); }
   100%{ opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes debugDropDown{
+  0%{ opacity: 0; transform: translateY(-16px) scaleY(0.96); }
+  100%{ opacity: 1; transform: translateY(0) scaleY(1); }
 }
 
 @keyframes waveformScan{
@@ -1701,7 +1815,7 @@ html[data-theme="light"] .theme-toggle-thumb{
 
 .chat-bottom-spacer{
   height: calc(var(--composer-height, 184px) + var(--keyboard-inset, 0px) + 18px);
-  transition: height 140ms ease;
+  transition: height 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .voice-close-btn{
@@ -2384,3 +2498,66 @@ html[data-theme="light"] .math-display-text{
     padding: 0.68rem 0.74rem;
   }
 }
+
+
+/* Keyboard composer motion */
+@media (prefers-reduced-motion: reduce){
+  .composer-fixed,
+  .chat-bottom-spacer{
+    transition: none;
+  }
+}
+
+/* Animated active composer border. The glow runs around the composer border only when the textarea is focused. */
+@property --composer-glow-angle{
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.composer-bar::after{
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 2;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  display: block !important;
+  opacity: 0 !important;
+  transform: none !important;
+  background: conic-gradient(
+    from var(--composer-glow-angle),
+    rgba(125,90,255,0.12),
+    rgba(0,230,184,0.92),
+    rgba(255,255,255,0.66),
+    rgba(125,90,255,0.92),
+    rgba(0,230,184,0.92),
+    rgba(125,90,255,0.12)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  transition: opacity 180ms ease;
+}
+
+.composer-bar:focus-within::after{
+  opacity: 1 !important;
+  animation: composerBorderOrbit 2.4s linear infinite !important;
+}
+
+.composer-bar:focus-within{
+  border-color: rgba(0,230,184,0.22);
+  box-shadow: var(--composer-shadow), 0 0 24px rgba(0,230,184,0.10), 0 0 36px rgba(125,90,255,0.08);
+}
+
+@keyframes composerBorderOrbit{
+  to{ --composer-glow-angle: 360deg; }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .composer-bar:focus-within::after{
+    animation: none !important;
+  }
+}
+

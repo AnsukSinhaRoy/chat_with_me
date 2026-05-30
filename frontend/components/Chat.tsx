@@ -832,6 +832,22 @@ export default function Chat() {
     }, 80);
   }
 
+  function keepPromptFocused(event: React.PointerEvent<HTMLElement>) {
+    // Mobile browsers blur the textarea as soon as a button receives pointerdown.
+    // Preventing the default pointer focus keeps the keyboard open while the
+    // mode selector is used, without changing send/mic behavior.
+    if (document.activeElement === inputRef.current) event.preventDefault();
+  }
+
+  function selectMode(mode: AppMode) {
+    setAppMode(mode);
+    setModeMenuOpen(false);
+
+    if (document.activeElement === inputRef.current) {
+      window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+    }
+  }
+
   function autosizePrompt() {
     const el = inputRef.current;
     if (!el) return;
@@ -1530,6 +1546,7 @@ export default function Chat() {
         <button
           className="mode-pill"
           type="button"
+          onPointerDown={keepPromptFocused}
           onClick={() => setModeMenuOpen((v) => !v)}
           aria-haspopup="menu"
           aria-expanded={modeMenuOpen}
@@ -1548,7 +1565,8 @@ export default function Chat() {
                 key={mode}
                 className="mode-item"
                 role="menuitem"
-                onClick={() => setMode(mode)}
+                onPointerDown={keepPromptFocused}
+                onClick={() => selectMode(mode)}
                 aria-checked={appMode === mode}
               >
                 <div className="mode-item-text">
@@ -1611,6 +1629,7 @@ export default function Chat() {
             <button
               className="voice-close-btn"
               type="button"
+              onPointerDown={keepPromptFocused}
               onClick={dismissVoiceNotice}
               aria-label="Dismiss voice notification"
               title="Dismiss"
@@ -1792,7 +1811,7 @@ export default function Chat() {
               <button className="chip" type="button" onClick={() => fillPrompt("What should we know about your life story in a few sentences?")}>What should we know about your life story in a few sentences?</button>
               <button className="chip" type="button" onClick={() => fillPrompt("What’s your #1 superpower?")}>What’s your #1 superpower?</button>
               <button className="chip" type="button" onClick={() => fillPrompt("What are the top 3 areas you’d like to grow in?")}>What are the top 3 areas you’d like to grow in?</button>
-              <button className="chip" type="button" onClick={() => fillPrompt("What misconception do your coworkers have about you?")}>What misconception do your coworkers have about you?</button>
+              <button className="chip" type="button" onClick={() => fillPrompt("Give complete mathematical detail of your M.Tech Thesis")}>Give complete mathematical detail of your M.Tech Thesis</button>
             </div>
           </div>
         </>
