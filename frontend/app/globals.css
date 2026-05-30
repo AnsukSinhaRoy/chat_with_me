@@ -230,8 +230,60 @@ textarea:focus-visible{
   font-size: 1.05rem;
 }
 
-.mic-glyph{
-  line-height: 1;
+.voice-wave-glyph{
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 999px;
+}
+
+.voice-wave-glyph span{
+  width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(0,230,184,0.82));
+  box-shadow: 0 0 12px rgba(0,230,184,0.30);
+}
+
+.voice-wave-glyph span:nth-child(1){ height: 8px; opacity: 0.78; }
+.voice-wave-glyph span:nth-child(2){ height: 15px; }
+.voice-wave-glyph span:nth-child(3){ height: 10px; opacity: 0.86; }
+
+.mic-btn:hover .voice-wave-glyph span:nth-child(1),
+.mic-btn:focus-visible .voice-wave-glyph span:nth-child(1){
+  animation: voiceGlyphOne 780ms ease-in-out infinite;
+}
+
+.mic-btn:hover .voice-wave-glyph span:nth-child(2),
+.mic-btn:focus-visible .voice-wave-glyph span:nth-child(2){
+  animation: voiceGlyphTwo 780ms ease-in-out infinite;
+}
+
+.mic-btn:hover .voice-wave-glyph span:nth-child(3),
+.mic-btn:focus-visible .voice-wave-glyph span:nth-child(3){
+  animation: voiceGlyphThree 780ms ease-in-out infinite;
+}
+
+@keyframes voiceGlyphOne{
+  0%, 100%{ height: 8px; }
+  50%{ height: 14px; }
+}
+
+@keyframes voiceGlyphTwo{
+  0%, 100%{ height: 15px; }
+  50%{ height: 9px; }
+}
+
+@keyframes voiceGlyphThree{
+  0%, 100%{ height: 10px; }
+  50%{ height: 16px; }
+}
+
+html[data-theme="light"] .voice-wave-glyph span{
+  background: linear-gradient(180deg, rgba(15,23,42,0.92), rgba(20,184,166,0.92));
+  box-shadow: 0 0 10px rgba(20,184,166,0.24);
 }
 
 .stop-glyph{
@@ -1416,6 +1468,10 @@ button:active:not(:disabled),
 }
 
 @media (prefers-reduced-motion: reduce){
+  .mic-btn:hover .voice-wave-glyph span,
+  .mic-btn:focus-visible .voice-wave-glyph span{
+    animation: none !important;
+  }
   *, *::before, *::after{
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
@@ -1925,4 +1981,404 @@ html[data-theme="light"] .bubble:hover{
 
 html[data-theme="light"] button:focus-visible{
   outline-color: rgba(17,24,39,0.42);
+}
+
+/* --- Assistant response typography: render Markdown/math instead of raw model text. --- */
+.bubble{
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.bubble.ai{
+  max-width: min(760px, calc(100% - 32px));
+}
+
+.bubble.user{
+  max-width: min(640px, 86%);
+}
+
+.bubble-text{
+  min-width: 0;
+}
+
+.plain-message{
+  white-space: pre-wrap;
+}
+
+.markdown-message{
+  white-space: normal;
+  line-height: 1.68;
+  letter-spacing: 0.002em;
+}
+
+.markdown-message > *:first-child{
+  margin-top: 0;
+}
+
+.markdown-message > *:last-child{
+  margin-bottom: 0;
+}
+
+.markdown-message p{
+  margin: 0.72em 0;
+}
+
+.markdown-message strong{
+  color: rgba(255,255,255,0.96);
+  font-weight: 850;
+}
+
+.markdown-message em{
+  color: rgba(255,255,255,0.84);
+}
+
+.markdown-message ul,
+.markdown-message ol{
+  margin: 0.72em 0;
+  padding-left: 1.35rem;
+}
+
+.markdown-message li{
+  margin: 0.34em 0;
+  padding-left: 0.1rem;
+}
+
+.markdown-message li::marker{
+  color: rgba(0,230,184,0.78);
+}
+
+.markdown-message blockquote{
+  margin: 0.9em 0;
+  padding: 0.05rem 0 0.05rem 0.9rem;
+  border-left: 3px solid rgba(0,230,184,0.42);
+  color: rgba(255,255,255,0.78);
+}
+
+.markdown-message a{
+  color: #9dfff0;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(157,255,240,0.34);
+}
+
+.markdown-message a:hover{
+  border-bottom-color: rgba(157,255,240,0.75);
+}
+
+.markdown-inline-code{
+  padding: 0.13rem 0.34rem;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.075);
+  color: rgba(255,255,255,0.92);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  white-space: break-spaces;
+}
+
+.markdown-code-block{
+  margin: 0.9em 0;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+  background: rgba(0,0,0,0.24);
+  overflow-x: auto;
+  line-height: 1.55;
+}
+
+.markdown-code-block code{
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255,255,255,0.90);
+  white-space: pre;
+}
+
+.markdown-table-wrap{
+  width: 100%;
+  margin: 0.9em 0;
+  overflow-x: auto;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+}
+
+.markdown-message table{
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.markdown-message th,
+.markdown-message td{
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-message th{
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.92);
+  font-weight: 800;
+}
+
+.markdown-message tr:last-child td{
+  border-bottom: 0;
+}
+
+.markdown-message .katex{
+  font-size: 1.02em;
+}
+
+.markdown-message .katex-display{
+  margin: 0.9em 0;
+  padding: 0.45rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-message .katex-html{
+  overflow-wrap: normal;
+}
+
+html[data-theme="light"] .markdown-message strong,
+html[data-theme="light"] .markdown-code-block code,
+html[data-theme="light"] .markdown-inline-code,
+html[data-theme="light"] .markdown-message th{
+  color: rgba(17,24,39,0.94);
+}
+
+html[data-theme="light"] .markdown-message em,
+html[data-theme="light"] .markdown-message blockquote{
+  color: rgba(31,41,55,0.72);
+}
+
+html[data-theme="light"] .markdown-message li::marker{
+  color: rgba(13,143,114,0.92);
+}
+
+html[data-theme="light"] .markdown-message blockquote{
+  border-left-color: rgba(13,143,114,0.42);
+}
+
+html[data-theme="light"] .markdown-message a{
+  color: #0b7563;
+  border-bottom-color: rgba(11,117,99,0.32);
+}
+
+html[data-theme="light"] .markdown-message a:hover{
+  border-bottom-color: rgba(11,117,99,0.70);
+}
+
+html[data-theme="light"] .markdown-inline-code{
+  border-color: rgba(31,41,55,0.12);
+  background: rgba(31,41,55,0.055);
+}
+
+html[data-theme="light"] .markdown-code-block{
+  border-color: rgba(31,41,55,0.12);
+  background: rgba(31,41,55,0.055);
+}
+
+html[data-theme="light"] .markdown-table-wrap{
+  border-color: rgba(31,41,55,0.12);
+}
+
+html[data-theme="light"] .markdown-message th,
+html[data-theme="light"] .markdown-message td{
+  border-bottom-color: rgba(31,41,55,0.09);
+}
+
+html[data-theme="light"] .markdown-message th{
+  background: rgba(31,41,55,0.045);
+}
+
+@media (max-width: 720px){
+  .bubble.ai,
+  .bubble.user{
+    max-width: calc(100% - 18px);
+  }
+
+  .bubble{
+    padding: 13px 16px;
+  }
+
+  .markdown-message{
+    line-height: 1.62;
+  }
+
+  .markdown-message p{
+    margin: 0.66em 0;
+  }
+}
+
+/* Local markdown/math renderer: no external runtime parser package required. */
+.math-inline{
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.03rem 0.2rem;
+  margin: 0 0.03rem;
+  border-radius: 7px;
+  background: rgba(0,230,184,0.08);
+  color: rgba(230,255,250,0.96);
+  font-family: ui-serif, Cambria, "Times New Roman", Times, serif;
+  font-size: 0.98em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  vertical-align: baseline;
+}
+
+.math-display{
+  display: block;
+  width: 100%;
+  margin: 0.9em 0;
+  padding: 0.72rem 0.85rem;
+  border: 1px solid rgba(0,230,184,0.18);
+  border-radius: 14px;
+  background: rgba(0,230,184,0.06);
+  color: rgba(235,255,252,0.95);
+  font-family: ui-serif, Cambria, "Times New Roman", Times, serif;
+  line-height: 1.55;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3,
+.markdown-message h4{
+  margin: 0.95em 0 0.45em;
+  line-height: 1.25;
+  color: rgba(255,255,255,0.96);
+  letter-spacing: -0.015em;
+}
+
+.markdown-message h1{font-size: 1.24em;}
+.markdown-message h2{font-size: 1.16em;}
+.markdown-message h3{font-size: 1.08em;}
+.markdown-message h4{font-size: 1.02em;}
+
+html[data-theme="light"] .math-inline{
+  background: rgba(13,143,114,0.08);
+  color: rgba(17,24,39,0.94);
+}
+
+html[data-theme="light"] .math-display{
+  border-color: rgba(13,143,114,0.18);
+  background: rgba(13,143,114,0.055);
+  color: rgba(17,24,39,0.94);
+}
+
+html[data-theme="light"] .markdown-message h1,
+html[data-theme="light"] .markdown-message h2,
+html[data-theme="light"] .markdown-message h3,
+html[data-theme="light"] .markdown-message h4{
+  color: rgba(17,24,39,0.94);
+}
+
+/* --- Response readability refinement: technical text should look typeset, not like raw TeX/code. --- */
+.bubble.ai{
+  max-width: min(830px, calc(100% - 24px));
+}
+
+.markdown-message{
+  color: rgba(247,250,252,0.91);
+  font-size: 0.99rem;
+  line-height: 1.72;
+}
+
+.markdown-message p{
+  margin: 0.76em 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.math-inline{
+  display: inline;
+  padding: 0 0.04rem;
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(226,255,250,0.96);
+  font-family: ui-serif, Cambria, Georgia, "Times New Roman", Times, serif;
+  font-size: 1.02em;
+  font-weight: 650;
+  line-height: inherit;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  vertical-align: baseline;
+}
+
+.math-inline-long{
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.math-display{
+  display: block;
+  max-width: 100%;
+  margin: 0.95em 0;
+  padding: 0.78rem 0.9rem;
+  border: 1px solid rgba(0,230,184,0.16);
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(0,230,184,0.075), rgba(125,90,255,0.055));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.math-display-text{
+  display: inline-block;
+  min-width: max-content;
+  color: rgba(235,255,252,0.97);
+  font-family: ui-serif, Cambria, Georgia, "Times New Roman", Times, serif;
+  font-size: 1.02em;
+  font-weight: 650;
+  line-height: 1.55;
+  letter-spacing: 0.008em;
+  white-space: pre;
+}
+
+.markdown-inline-code{
+  white-space: break-spaces;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+html[data-theme="light"] .markdown-message{
+  color: rgba(17,24,39,0.86);
+}
+
+html[data-theme="light"] .math-inline{
+  color: rgba(11,98,84,0.98);
+  background: transparent;
+}
+
+html[data-theme="light"] .math-display{
+  border-color: rgba(13,143,114,0.16);
+  background: linear-gradient(135deg, rgba(13,143,114,0.07), rgba(106,83,230,0.045));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.65);
+}
+
+html[data-theme="light"] .math-display-text{
+  color: rgba(17,24,39,0.93);
+}
+
+@media (max-width: 720px){
+  .bubble.ai,
+  .bubble.user{
+    max-width: calc(100% - 12px);
+  }
+
+  .markdown-message{
+    font-size: 0.98rem;
+    line-height: 1.66;
+  }
+
+  .math-display{
+    margin: 0.82em 0;
+    padding: 0.68rem 0.74rem;
+  }
 }

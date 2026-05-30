@@ -147,6 +147,63 @@ def build_gemini_history(messages: List[Dict[str, Any]], history_turns: int) -> 
     return contents
 
 
+
+
+def _needs_continue(text: str) -> bool:
+    text = (text or "").strip()
+    if not text:
+        return False
+    if text.endswith("[CONTINUE]"):
+        return True
+    # If the model hit the output cap without the explicit token, the text often
+    # ends mid-sentence. Continue once rather than returning a broken answer.
+    if len(text) > 120 and text[-1] not in ".?!\"'”’):]}":
+        return True
+    return False
+
+
+def _strip_continue_token(text: str) -> str:
+    text = (text or "").strip()
+    while text.endswith("[CONTINUE]"):
+        text = text[:-10].rstrip()
+    return text
+
+
+def _merge_text(prefix: str, continuation: str) -> str:
+    prefix = (prefix or "").rstrip()
+    continuation = (continuation or "").lstrip()
+    if not prefix:
+        return continuation
+    if not continuation:
+        return prefix
+    # Avoid double spaces after punctuation while still joining interrupted words
+    # reasonably when the first response ended mid-sentence.
+    joiner = "" if prefix.endswith(("-", "/", "(", "[", "{")) else " "
+    return prefix + joiner + continuation
+
+
+def _add_continuation_turn(contents: List[Dict[str, Any]], partial_answer: str) -> List[Dict[str, Any]]:
+    cleaned = _strip_continue_token(partial_answer)
+    next_contents = list(contents)
+    if cleaned:
+        next_contents.append({"role": "model", "parts": [{"text": cleaned}]})
+    next_contents.append({
+        "role": "user",
+        "parts": [{
+            "text": (
+                "Continue exactly from where the previous answer stopped. "
+                "Do not repeat earlier text. Finish the answer cleanly. "
+                "Only end with [CONTINUE] if another continuation is still absolutely required."
+            )
+        }],
+    })
+    return next_contents
+
+
+def _is_rate_limit_error(err_msg: str) -> bool:
+    text = err_msg.upper()
+    return any(token in text for token in ["429", "QUOTA", "RESOURCE_EXHAUSTED", "RATE LIMIT", "RATE_LIMIT"])
+
 def _generate_with_key_and_model_fallback(
     api_keys: List[str],
     model_candidates: List[str],
@@ -255,13 +312,44 @@ def chat_reply(messages: List[Dict[str, Any]], app_mode: str = "quota_saver") ->
         config_factory=lambda model: _make_generation_config(types, model, mode, max_out, sys_inst, thinking_level),
         config_without_thinking=lambda: _make_generation_config_without_thinking(types, max_out, sys_inst, mode),
     )
+
+    bot_text = _strip_continue_token(resp.text or "")
+    hops_used = 0
+    continuation_contents = hist
+
+    for _ in range(max_hops):
+        if not _needs_continue((resp.text or "").strip()) and not _needs_continue(bot_text):
+            break
+        hops_used += 1
+        continuation_contents = _add_continuation_turn(continuation_contents, bot_text)
+        try:
+            resp2, used2, last_m2, errs2 = _generate_with_key_and_model_fallback(
+                api_keys=api_keys,
+                model_candidates=candidates,
+                contents=continuation_contents,
+                config_factory=lambda model: _make_generation_config(types, model, mode, max_out, sys_inst, thinking_level),
+                config_without_thinking=lambda: _make_generation_config_without_thinking(types, max_out, sys_inst, mode),
+            )
+            used = used2
+            last_m = last_m2
+            errs.extend(errs2)
+            continuation = _strip_continue_token(resp2.text or "")
+            if not continuation:
+                break
+            bot_text = _merge_text(bot_text, continuation)
+            resp = resp2
+        except Exception as exc:
+            errs.append(f"Continuation failed: {exc}")
+            break
+
     return {
-        "reply": (resp.text or "").strip(),
+        "reply": bot_text.strip() or "I didn’t catch that fully — can you say it again?",
         "used_model": used,
         "last_tried_model": last_m,
         "model_errors": errs[-8:],
         "mode_detail": f"{mode}; thinking={thinking_level}; max_output_tokens={max_out}",
         "candidate_models": candidates,
+        "hops_used": hops_used,
     }
 
 

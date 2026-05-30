@@ -9,6 +9,20 @@ for (const key of Object.keys(env)) {
 env.NEXT_TELEMETRY_DISABLED = "1";
 env.NEXT_PRIVATE_BUILD_WORKER = "0";
 
+const nextBin = path.join(frontendDir, "node_modules", "next", "dist", "bin", "next");
+
+try {
+  require("node:fs").accessSync(nextBin);
+} catch {
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  const install = spawnSync(npmCmd, ["install"], { cwd: frontendDir, stdio: "inherit", env });
+  if (install.error) {
+    console.error(install.error);
+    process.exit(1);
+  }
+  if ((install.status ?? 1) !== 0) process.exit(install.status ?? 1);
+}
+
 const result = spawnSync(
   process.execPath,
   ["./node_modules/next/dist/bin/next", "build", "--turbopack"],

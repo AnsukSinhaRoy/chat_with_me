@@ -144,6 +144,516 @@ function buildWaveLevels(rms: number) {
   });
 }
 
+function parseLinkToken(token: string) {
+  const match = token.match(/^\[([^\]]+)]\((https?:\/\/[^)\s]+)\)$/i);
+  return match ? { label: match[1], href: match[2] } : null;
+}
+
+const SUBSCRIPT_CHARS: Record<string, string> = {
+  "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+  "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
+  a: "ₐ", e: "ₑ", h: "ₕ", i: "ᵢ", j: "ⱼ", k: "ₖ", l: "ₗ", m: "ₘ", n: "ₙ", o: "ₒ", p: "ₚ", r: "ᵣ", s: "ₛ", t: "ₜ", u: "ᵤ", v: "ᵥ", x: "ₓ",
+  A: "ₐ", E: "ₑ", H: "ₕ", I: "ᵢ", J: "ⱼ", K: "ₖ", L: "ₗ", M: "ₘ", N: "ₙ", O: "ₒ", P: "ₚ", R: "ᵣ", S: "ₛ", T: "ₜ", U: "ᵤ", V: "ᵥ", X: "ₓ",
+};
+
+const SUPERSCRIPT_CHARS: Record<string, string> = {
+  "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+  "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+  a: "ᵃ", b: "ᵇ", c: "ᶜ", d: "ᵈ", e: "ᵉ", f: "ᶠ", g: "ᵍ", h: "ʰ", i: "ⁱ", j: "ʲ", k: "ᵏ", l: "ˡ", m: "ᵐ", n: "ⁿ", o: "ᵒ", p: "ᵖ", r: "ʳ", s: "ˢ", t: "ᵗ", u: "ᵘ", v: "ᵛ", w: "ʷ", x: "ˣ", y: "ʸ", z: "ᶻ",
+  A: "ᴬ", B: "ᴮ", D: "ᴰ", E: "ᴱ", G: "ᴳ", H: "ᴴ", I: "ᴵ", J: "ᴶ", K: "ᴷ", L: "ᴸ", M: "ᴹ", N: "ᴺ", O: "ᴼ", P: "ᴾ", R: "ᴿ", T: "ᵀ", U: "ᵁ", V: "ⱽ", W: "ᵂ",
+};
+
+const GREEK_SYMBOLS: Record<string, string> = {
+  alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", eta: "η", theta: "θ", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", phi: "φ", psi: "ψ", omega: "ω",
+  Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
+};
+
+function toScript(value: string, table: Record<string, string>) {
+  return value.split("").map((ch) => table[ch] || ch).join("");
+}
+
+function readLatexGroup(source: string, startIndex: number) {
+  if (source[startIndex] !== "{") return null;
+
+  let depth = 0;
+  let cursor = startIndex;
+  while (cursor < source.length) {
+    const ch = source[cursor];
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          value: source.slice(startIndex + 1, cursor),
+          nextIndex: cursor + 1,
+        };
+      }
+    }
+    cursor += 1;
+  }
+
+  return null;
+}
+
+function readLatexToken(source: string, startIndex: number) {
+  const group = readLatexGroup(source, startIndex);
+  if (group) return group;
+
+  const remainder = source.slice(startIndex);
+  const match = remainder.match(/^([A-Za-z0-9+\-=()]+)/);
+  if (match) {
+    return {
+      value: match[1],
+      nextIndex: startIndex + match[1].length,
+    };
+  }
+
+  if (startIndex < source.length) {
+    return {
+      value: source[startIndex],
+      nextIndex: startIndex + 1,
+    };
+  }
+
+  return null;
+}
+
+function normalizeLatexExpression(source: string): string {
+  let output = "";
+  let i = 0;
+
+  const pushWithOptionalParens = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    return /[ +\-=]/.test(trimmed) && !/^\(.+\)$/.test(trimmed) ? `(${trimmed})` : trimmed;
+  };
+
+  while (i < source.length) {
+    const ch = source[i];
+
+    const bareCommand = source.slice(i).match(/^(frac|tfrac|dfrac|text|mathrm|operatorname|mathbf|mathit|mathtt|boldsymbol|textrm)\s*(?=\{)/);
+    if (bareCommand) {
+      const command = bareCommand[1];
+      i += command.length;
+      while (source[i] === " ") i += 1;
+
+      if (command === "frac" || command === "tfrac" || command === "dfrac") {
+        const numerator = readLatexGroup(source, i);
+        if (!numerator) {
+          output += "frac";
+          continue;
+        }
+        i = numerator.nextIndex;
+        while (source[i] === " ") i += 1;
+        const denominator = readLatexGroup(source, i);
+        if (!denominator) {
+          output += `${normalizeLatexExpression(numerator.value)}/`;
+          continue;
+        }
+        i = denominator.nextIndex;
+        const numText = pushWithOptionalParens(normalizeLatexExpression(numerator.value));
+        const denText = pushWithOptionalParens(normalizeLatexExpression(denominator.value));
+        output += `${numText}/${denText}`;
+        continue;
+      }
+
+      const body = readLatexGroup(source, i);
+      if (body) {
+        output += normalizeLatexExpression(body.value);
+        i = body.nextIndex;
+      }
+      continue;
+    }
+
+    const bareGreekName = Object.keys(GREEK_SYMBOLS)
+      .sort((a, b) => b.length - a.length)
+      .find((name) => {
+        if (!source.startsWith(name, i)) return false;
+        const before = i === 0 ? "" : source[i - 1];
+        const after = source[i + name.length] || "";
+        return !/[A-Za-z]/.test(before) && !/[A-Za-z]/.test(after);
+      });
+    if (bareGreekName) {
+      output += GREEK_SYMBOLS[bareGreekName];
+      i += bareGreekName.length;
+      continue;
+    }
+
+    if (ch === "\\") {
+      const next = source[i + 1];
+      if (next === "|" || next === "\\") {
+        output += next === "|" ? "‖" : "\\";
+        i += 2;
+        continue;
+      }
+
+      const commandMatch = source.slice(i + 1).match(/^([A-Za-z]+)/);
+      if (!commandMatch) {
+        i += 1;
+        continue;
+      }
+
+      const command = commandMatch[1];
+      i += 1 + command.length;
+
+      if (command === "frac" || command === "tfrac" || command === "dfrac") {
+        const numerator = readLatexGroup(source, i);
+        if (!numerator) {
+          output += "frac";
+          continue;
+        }
+        i = numerator.nextIndex;
+        while (source[i] === " ") i += 1;
+        const denominator = readLatexGroup(source, i);
+        if (!denominator) {
+          output += `${normalizeLatexExpression(numerator.value)}/`;
+          continue;
+        }
+        i = denominator.nextIndex;
+        const numText = pushWithOptionalParens(normalizeLatexExpression(numerator.value));
+        const denText = pushWithOptionalParens(normalizeLatexExpression(denominator.value));
+        output += `${numText}/${denText}`;
+        continue;
+      }
+
+      if (command === "sqrt") {
+        const body = readLatexGroup(source, i);
+        if (!body) {
+          output += "√";
+          continue;
+        }
+        i = body.nextIndex;
+        output += `√(${normalizeLatexExpression(body.value)})`;
+        continue;
+      }
+
+      if (["text", "mathrm", "operatorname", "operatorname*", "mathbf", "mathit", "mathtt", "boldsymbol", "textrm"].includes(command)) {
+        const body = readLatexGroup(source, i);
+        if (body) {
+          output += normalizeLatexExpression(body.value);
+          i = body.nextIndex;
+        }
+        continue;
+      }
+
+      if (command === "left" || command === "right") {
+        continue;
+      }
+
+      const symbol = GREEK_SYMBOLS[command];
+      if (symbol) {
+        output += symbol;
+        continue;
+      }
+
+      const commandMap: Record<string, string> = {
+        cdot: "·",
+        times: "×",
+        leq: "≤",
+        geq: "≥",
+        neq: "≠",
+        approx: "≈",
+        infty: "∞",
+        sum: "∑",
+        prod: "∏",
+        min: "min",
+        max: "max",
+        to: "→",
+        mapsto: "↦",
+        ell: "ℓ",
+        ldots: "…",
+        cdots: "⋯",
+      };
+      output += commandMap[command] || command;
+      continue;
+    }
+
+    if (ch === "_") {
+      const token = readLatexToken(source, i + 1);
+      if (token) {
+        output += toScript(normalizeLatexExpression(token.value), SUBSCRIPT_CHARS);
+        i = token.nextIndex;
+        continue;
+      }
+    }
+
+    if (ch === "^") {
+      const token = readLatexToken(source, i + 1);
+      if (token) {
+        output += toScript(normalizeLatexExpression(token.value), SUPERSCRIPT_CHARS);
+        i = token.nextIndex;
+        continue;
+      }
+    }
+
+    if (ch === "{" || ch === "}") {
+      i += 1;
+      continue;
+    }
+
+    output += ch;
+    i += 1;
+  }
+
+  return output;
+}
+
+function formatMathText(raw: string) {
+  let text = raw
+    .replace(/\\/g, "\\")
+    .replace(/\\,/g, " ")
+    .replace(/\\;/g, " ")
+    .replace(/\\!/g, "")
+    .trim();
+
+  text = normalizeLatexExpression(text)
+    .replace(/‖\s+/g, "‖")
+    .replace(/\s+‖/g, "‖")
+    .replace(/\s*([+\-=])\s*/g, " $1 ")
+    .replace(/\s+/g, " ")
+    .replace(/\(\s+/g, "(")
+    .replace(/\s+\)/g, ")")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim();
+
+  return text;
+}
+
+function renderMath(raw: string, display = false) {
+  const formatted = formatMathText(raw);
+  const className = display
+    ? "math-display-text"
+    : formatted.length > 28
+      ? "math-inline math-inline-long"
+      : "math-inline";
+
+  return <span className={className}>{formatted}</span>;
+}
+
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  const tokenPattern = /(`[^`\n]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|\\\([^\n]+?\\\)|\$[^$\n]+?\$)/g;
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+
+    const token = match[0];
+    const key = `${match.index}-${token}`;
+    const link = parseLinkToken(token);
+
+    if (token.startsWith("`") && token.endsWith("`")) {
+      nodes.push(
+        <code key={key} className="markdown-inline-code">
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith("**") && token.endsWith("**")) {
+      nodes.push(<strong key={key}>{renderInlineMarkdown(token.slice(2, -2))}</strong>);
+    } else if (token.startsWith("*") && token.endsWith("*")) {
+      nodes.push(<em key={key}>{renderInlineMarkdown(token.slice(1, -1))}</em>);
+    } else if (link) {
+      nodes.push(
+        <a key={key} href={link.href} target="_blank" rel="noreferrer">
+          {renderInlineMarkdown(link.label)}
+        </a>
+      );
+    } else if (token.startsWith("\\(") && token.endsWith("\\)")) {
+      nodes.push(<React.Fragment key={key}>{renderMath(token.slice(2, -2).trim())}</React.Fragment>);
+    } else if (token.startsWith("$") && token.endsWith("$")) {
+      nodes.push(<React.Fragment key={key}>{renderMath(token.slice(1, -1).trim())}</React.Fragment>);
+    } else {
+      nodes.push(token);
+    }
+
+    cursor = match.index + token.length;
+  }
+
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
+function isTableSeparator(line: string) {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function splitTableRow(line: string) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function renderMarkdownBlocks(markdown: string) {
+  const blocks: React.ReactNode[] = [];
+  const fencePattern = /```([\w+-]*)?\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let fence: RegExpExecArray | null;
+  let blockIndex = 0;
+
+  const pushTextBlocks = (text: string) => {
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    let i = 0;
+
+    const nextKey = (prefix: string) => `${prefix}-${blockIndex++}`;
+
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        i += 1;
+        continue;
+      }
+
+      const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+      if (heading) {
+        const level = Math.min(4, heading[1].length);
+        const headingContent = renderInlineMarkdown(heading[2]);
+        if (level === 1) blocks.push(<h1 key={nextKey("heading")}>{headingContent}</h1>);
+        else if (level === 2) blocks.push(<h2 key={nextKey("heading")}>{headingContent}</h2>);
+        else if (level === 3) blocks.push(<h3 key={nextKey("heading")}>{headingContent}</h3>);
+        else blocks.push(<h4 key={nextKey("heading")}>{headingContent}</h4>);
+        i += 1;
+        continue;
+      }
+
+      if (trimmed.startsWith("$$")) {
+        const mathLines: string[] = [];
+        const sameLine = trimmed.length > 2 ? trimmed.slice(2) : "";
+        if (sameLine && sameLine.endsWith("$$")) {
+          mathLines.push(sameLine.slice(0, -2));
+          i += 1;
+        } else {
+          if (sameLine) mathLines.push(sameLine);
+          i += 1;
+          while (i < lines.length && !lines[i].trim().endsWith("$$")) {
+            mathLines.push(lines[i]);
+            i += 1;
+          }
+          if (i < lines.length) {
+            mathLines.push(lines[i].trim().replace(/\$\$$/, ""));
+            i += 1;
+          }
+        }
+        blocks.push(<div key={nextKey("math")} className="math-display">{renderMath(mathLines.join("\n").trim(), true)}</div>);
+        continue;
+      }
+
+      if (trimmed.startsWith("\\[") || trimmed.endsWith("\\]")) {
+        const mathLines: string[] = [trimmed.replace(/^\\\[/, "").replace(/\\\]$/, "")];
+        i += 1;
+        while (i < lines.length && !lines[i].trim().endsWith("\\]")) {
+          mathLines.push(lines[i]);
+          i += 1;
+        }
+        if (i < lines.length) {
+          mathLines.push(lines[i].trim().replace(/\\\]$/, ""));
+          i += 1;
+        }
+        blocks.push(<div key={nextKey("math")} className="math-display">{renderMath(mathLines.join("\n").trim(), true)}</div>);
+        continue;
+      }
+
+      if (trimmed.startsWith(">")) {
+        const quoteLines: string[] = [];
+        while (i < lines.length && lines[i].trim().startsWith(">")) {
+          quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
+          i += 1;
+        }
+        blocks.push(<blockquote key={nextKey("quote")}>{renderInlineMarkdown(quoteLines.join(" "))}</blockquote>);
+        continue;
+      }
+
+      if (/^[-*]\s+/.test(trimmed)) {
+        const items: string[] = [];
+        while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+          items.push(lines[i].trim().replace(/^[-*]\s+/, ""));
+          i += 1;
+        }
+        blocks.push(
+          <ul key={nextKey("ul")}>
+            {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
+          </ul>
+        );
+        continue;
+      }
+
+      if (/^\d+\.\s+/.test(trimmed)) {
+        const items: string[] = [];
+        while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+          items.push(lines[i].trim().replace(/^\d+\.\s+/, ""));
+          i += 1;
+        }
+        blocks.push(
+          <ol key={nextKey("ol")}>
+            {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
+          </ol>
+        );
+        continue;
+      }
+
+      if (trimmed.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+        const header = splitTableRow(lines[i]);
+        i += 2;
+        const rows: string[][] = [];
+        while (i < lines.length && lines[i].trim().includes("|")) {
+          rows.push(splitTableRow(lines[i]));
+          i += 1;
+        }
+        blocks.push(
+          <div key={nextKey("table")} className="markdown-table-wrap">
+            <table>
+              <thead>
+                <tr>{header.map((cell, idx) => <th key={idx}>{renderInlineMarkdown(cell)}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map((row, rowIdx) => (
+                  <tr key={rowIdx}>{header.map((_, cellIdx) => <td key={cellIdx}>{renderInlineMarkdown(row[cellIdx] || "")}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+        continue;
+      }
+
+      const paraLines: string[] = [trimmed];
+      i += 1;
+      while (i < lines.length) {
+        const next = lines[i].trim();
+        if (!next) break;
+        if (/^(#{1,4})\s+/.test(next) || next.startsWith(">") || /^[-*]\s+/.test(next) || /^\d+\.\s+/.test(next) || next.startsWith("$$") || next.startsWith("\\[") || (next.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1]))) break;
+        paraLines.push(next);
+        i += 1;
+      }
+      blocks.push(<p key={nextKey("p")}>{renderInlineMarkdown(paraLines.join(" "))}</p>);
+    }
+  };
+
+  while ((fence = fencePattern.exec(markdown)) !== null) {
+    if (fence.index > lastIndex) pushTextBlocks(markdown.slice(lastIndex, fence.index));
+    const language = fence[1] ? `language-${fence[1]}` : "";
+    blocks.push(
+      <pre key={`code-${blockIndex++}`} className="markdown-code-block">
+        <code className={language}>{fence[2].replace(/\n$/, "")}</code>
+      </pre>
+    );
+    lastIndex = fence.index + fence[0].length;
+  }
+
+  if (lastIndex < markdown.length) pushTextBlocks(markdown.slice(lastIndex));
+
+  return blocks;
+}
+
+function MessageContent({ role, content }: Message) {
+  if (role === "user") {
+    return <div className="bubble-text plain-message">{content}</div>;
+  }
+
+  return <div className="bubble-text markdown-message">{renderMarkdownBlocks(content)}</div>;
+}
+
 export default function Chat() {
   const DEFAULT_MODE = normalizeAppMode(process.env.NEXT_PUBLIC_APP_MODE);
 
@@ -1133,7 +1643,7 @@ export default function Chat() {
                 title={micLabel}
                 disabled={busy || voicePhase === "stopping" || voicePhase === "transcribing"}
               >
-                {voicePhase === "recording" ? <span className="stop-glyph" /> : <span className="mic-glyph">🎤</span>}
+                {voicePhase === "recording" ? <span className="stop-glyph" /> : <span className="voice-wave-glyph" aria-hidden="true"><span /><span /><span /></span>}
               </button>
 
               <button
@@ -1183,7 +1693,7 @@ export default function Chat() {
                   const isPending = busy && idx === messages.length - 1 && m.role === "user";
                   return (
                     <div key={`${m.ts}-${idx}`} className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`} style={{ "--bubble-index": idx } as React.CSSProperties}>
-                      <div className="bubble-text">{m.content}</div>
+                      <MessageContent role={m.role} content={m.content} ts={m.ts} />
                       <div className="meta">{m.ts}</div>
                     </div>
                   );
