@@ -77,7 +77,7 @@ def _chat_mode_config(app_mode: str) -> Tuple[List[str], int, int, int, str]:
             or legacy_global
             or ["gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
         )
-        return _dedupe_models(candidates), 2600, 3, 16, "high"
+        return _dedupe_models(candidates), 4000, 3, 16, "high"
 
     candidates = (
         _comma_env("GEMINI_QUOTA_SAVER_MODEL_CANDIDATES")

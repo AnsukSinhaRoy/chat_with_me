@@ -4,19 +4,18 @@
   "private": true,
   "description": "AI twin chat web app with a Next.js frontend and FastAPI backend.",
   "scripts": {
-    "postinstall": "cd frontend && npm install --no-audit --no-fund --registry=https://registry.npmjs.org/",
-    "dev": "cd frontend && npm run dev",
-    "build": "node scripts/build-frontend.cjs",
-    "start": "cd frontend && npm run start",
-    "typecheck": "cd frontend && npx tsc --noEmit",
-    "frontend:install": "cd frontend && npm install",
-    "frontend:dev": "cd frontend && npm run dev",
-    "frontend:build": "cd frontend && npm run build",
-    "frontend:typecheck": "cd frontend && npm run typecheck"
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend run start",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "frontend:install": "npm --prefix frontend ci",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:typecheck": "npm --prefix frontend run typecheck"
   },
   "engines": {
-    "node": ">=20 <23",
-    "npm": ">=10"
+    "node": "20.x",
+    "npm": ">=10 <11"
   },
   "packageManager": "npm@10.9.3"
 }
