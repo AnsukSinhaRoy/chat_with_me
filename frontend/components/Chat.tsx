@@ -702,6 +702,7 @@ export default function Chat() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const composerFixedRef = useRef<HTMLDivElement | null>(null);
   const [composerHeight, setComposerHeight] = useState(184);
+  const [keyboardInset, setKeyboardInset] = useState(0);
 
   const hasUserMessages = useMemo(() => messages.some((m) => m.role === "user"), [messages]);
   const isVoiceActive = voicePhase !== "idle";
@@ -771,11 +772,64 @@ export default function Chat() {
   }, [hasUserMessages]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let raf = 0;
+
+    const updateKeyboardInset = () => {
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => {
+        const viewport = window.visualViewport;
+        const active = document.activeElement;
+        const isEditable =
+          active instanceof HTMLTextAreaElement ||
+          active instanceof HTMLInputElement ||
+          active instanceof HTMLSelectElement ||
+          active instanceof HTMLElement && active.isContentEditable;
+        const isMobileWidth = window.matchMedia("(max-width: 720px)").matches;
+
+        if (!viewport || !isMobileWidth || !isEditable) {
+          setKeyboardInset(0);
+          return;
+        }
+
+        const rawInset = window.innerHeight - viewport.height - viewport.offsetTop;
+        const nextInset = Math.max(0, Math.round(rawInset));
+        setKeyboardInset(nextInset > 72 ? nextInset : 0);
+      });
+    };
+
+    updateKeyboardInset();
+    window.visualViewport?.addEventListener("resize", updateKeyboardInset);
+    window.visualViewport?.addEventListener("scroll", updateKeyboardInset);
+    window.addEventListener("resize", updateKeyboardInset);
+    window.addEventListener("orientationchange", updateKeyboardInset);
+    document.addEventListener("focusin", updateKeyboardInset);
+    document.addEventListener("focusout", updateKeyboardInset);
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.visualViewport?.removeEventListener("resize", updateKeyboardInset);
+      window.visualViewport?.removeEventListener("scroll", updateKeyboardInset);
+      window.removeEventListener("resize", updateKeyboardInset);
+      window.removeEventListener("orientationchange", updateKeyboardInset);
+      document.removeEventListener("focusin", updateKeyboardInset);
+      document.removeEventListener("focusout", updateKeyboardInset);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => cleanupRecordingResources();
   }, []);
 
   function focusPrompt() {
     inputRef.current?.focus();
+  }
+
+  function handlePromptFocus() {
+    window.setTimeout(() => {
+      inputRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 80);
   }
 
   function autosizePrompt() {
@@ -1626,6 +1680,7 @@ export default function Chat() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onPromptKeyDown}
+            onFocus={handlePromptFocus}
             disabled={busy || isVoiceActive}
             autoComplete="off"
             rows={1}
@@ -1668,7 +1723,7 @@ export default function Chat() {
       className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"}`}
       data-mode={appMode}
       data-voice-phase={voicePhase}
-      style={{ "--composer-height": `${composerHeight}px` } as React.CSSProperties}
+      style={{ "--composer-height": `${composerHeight}px`, "--keyboard-inset": `${keyboardInset}px` } as React.CSSProperties}
     >
       {hasUserMessages ? (
         <>

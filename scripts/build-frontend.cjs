@@ -15,7 +15,7 @@ try {
   require("node:fs").accessSync(nextBin);
 } catch {
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-  const install = spawnSync(npmCmd, ["install"], { cwd: frontendDir, stdio: "inherit", env });
+  const install = spawnSync(npmCmd, ["install", "--no-audit", "--no-fund", "--registry=https://registry.npmjs.org/"], { cwd: frontendDir, stdio: "inherit", env });
   if (install.error) {
     console.error(install.error);
     process.exit(1);

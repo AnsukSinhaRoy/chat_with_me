@@ -4,7 +4,7 @@
   "private": true,
   "description": "AI twin chat web app with a Next.js frontend and FastAPI backend.",
   "scripts": {
-    "postinstall": "cd frontend && npm install",
+    "postinstall": "cd frontend && npm install --no-audit --no-fund --registry=https://registry.npmjs.org/",
     "dev": "cd frontend && npm run dev",
     "build": "node scripts/build-frontend.cjs",
     "start": "cd frontend && npm run start",

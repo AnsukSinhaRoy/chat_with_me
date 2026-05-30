@@ -11,6 +11,7 @@
   --ok: #00e6b8;
   --shadow: 0 18px 56px rgba(0,0,0,0.42);
   --composer-bottom: 18px;
+  --keyboard-inset: 0px;
 }
 
 *{ box-sizing: border-box; }
@@ -546,10 +547,11 @@ html[data-theme="light"] .voice-wave-glyph span{
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: var(--keyboard-inset, 0px);
   z-index: 60;
   padding: 14px 16px max(var(--composer-bottom), env(safe-area-inset-bottom));
   background: linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,0.62));
+  transition: bottom 160ms ease, padding 160ms ease;
 }
 
 .composer-hero{
@@ -1698,7 +1700,7 @@ html[data-theme="light"] .theme-toggle-thumb{
 }
 
 .chat-bottom-spacer{
-  height: calc(var(--composer-height, 184px) + 18px);
+  height: calc(var(--composer-height, 184px) + var(--keyboard-inset, 0px) + 18px);
   transition: height 140ms ease;
 }
 
