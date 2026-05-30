@@ -18,6 +18,8 @@ type ChatResponse = {
   used_model?: string | null;
   last_tried_model?: string | null;
   model_errors?: string[];
+  mode_detail?: string | null;
+  candidate_models?: string[];
   hops_used?: number;
 };
 
@@ -48,15 +50,11 @@ function normalizeVoiceTranscriptionMode(value: unknown): VoiceTranscriptionMode
 function buildApiUrl(path: string) {
   if (!CONFIGURED_API_BASE) {
     throw new Error(
-      "Backend URL is not configured. Set NEXT_PUBLIC_API_BASE_URL in the frontend Vercel project to your backend domain, then redeploy the frontend."
+      "Chat service is not configured. Set NEXT_PUBLIC_API_BASE_URL in the frontend deployment, then redeploy."
     );
   }
 
   return `${CONFIGURED_API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-function configuredApiLabel() {
-  return CONFIGURED_API_BASE || "Not configured";
 }
 
 function stringifyServerMessage(raw: string) {
@@ -90,21 +88,21 @@ async function responseErrorMessage(response: Response, area: "chat" | "transcri
   }
 
   if (/Missing GEMINI_API_KEYS/i.test(detail)) {
-    return "Backend is deployed, but GEMINI_API_KEYS is missing in the backend environment variables. Please add it to your Vercel dashboard.";
+    return "Model service is deployed, but GEMINI_API_KEYS is missing in the environment variables. Please add it to your Vercel dashboard.";
   }
 
   if (response.status === 413) {
     return "The audio file was too large for the backend. Record a shorter clip and try again.";
   }
 
-  const prefix = area === "chat" ? "Chat request failed" : area === "transcription" ? "Transcription failed" : "Backend health check failed";
+  const prefix = area === "chat" ? "Chat request failed" : area === "transcription" ? "Transcription failed" : "Connection check failed";
   return `${prefix} (${response.status}). ${detail || response.statusText || "No useful error message returned."}`;
 }
 
 function friendlyRequestError(error: unknown, area: "chat" | "transcription") {
   const message = error instanceof Error ? error.message : String(error || "Request failed");
 
-  if (/Backend URL is not configured/i.test(message)) return message;
+  if (/Chat service is not configured|Backend URL is not configured/i.test(message)) return message;
   if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
     return (
       "Could not reach the backend. Check NEXT_PUBLIC_API_BASE_URL in the frontend deployment and CORS_ORIGINS in the backend deployment. " +
@@ -192,6 +190,8 @@ export default function Chat() {
   const voicePhaseRef = useRef<VoicePhase>("idle");
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const composerFixedRef = useRef<HTMLDivElement | null>(null);
+  const [composerHeight, setComposerHeight] = useState(184);
 
   const hasUserMessages = useMemo(() => messages.some((m) => m.role === "user"), [messages]);
   const isVoiceActive = voicePhase !== "idle";
@@ -240,6 +240,25 @@ export default function Chat() {
   useEffect(() => {
     if (hasUserMessages) chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, busy, hasUserMessages]);
+
+  useEffect(() => {
+    if (!hasUserMessages) return;
+
+    const el = composerFixedRef.current;
+    if (!el) return;
+
+    const updateHeight = () => setComposerHeight(Math.ceil(el.getBoundingClientRect().height));
+    updateHeight();
+
+    const ro = new ResizeObserver(updateHeight);
+    ro.observe(el);
+    window.addEventListener("resize", updateHeight);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", updateHeight);
+    };
+  }, [hasUserMessages]);
 
   useEffect(() => {
     return () => cleanupRecordingResources();
@@ -382,7 +401,7 @@ export default function Chat() {
   }
 
   function modeSubtitle(m: AppMode) {
-    return m === "quality" ? "Best answers" : "Answers quickly";
+    return m === "quality" ? "Deep reasoning" : "Balanced quality";
   }
 
   function setMode(m: AppMode) {
@@ -981,6 +1000,11 @@ export default function Chat() {
     );
   }
 
+  function dismissVoiceNotice() {
+    setVoiceError("");
+    setTranscriptPreview("");
+  }
+
   function renderVoiceStatus() {
     if (!isVoiceActive && !voiceError && !transcriptPreview) return null;
 
@@ -1019,6 +1043,16 @@ export default function Chat() {
             >
               Done
             </button>
+          ) : voiceError || transcriptPreview ? (
+            <button
+              className="voice-close-btn"
+              type="button"
+              onClick={dismissVoiceNotice}
+              aria-label="Dismiss voice notification"
+              title="Dismiss"
+            >
+              ×
+            </button>
           ) : null}
         </div>
 
@@ -1037,10 +1071,6 @@ export default function Chat() {
     return (
       <div className={`debug-panel ${extraClassName}`.trim()}>
         <div className="debug-row">
-          <span>Backend URL</span>
-          <strong>{configuredApiLabel()}</strong>
-        </div>
-        <div className="debug-row">
           <span>App mode</span>
           <strong>{appMode}</strong>
         </div>
@@ -1056,6 +1086,14 @@ export default function Chat() {
           <span>Last tried model</span>
           <strong>{debug?.last_tried_model || "-"}</strong>
         </div>
+        <div className="debug-row">
+          <span>Mode detail</span>
+          <strong>{debug?.mode_detail || "-"}</strong>
+        </div>
+        <div className="debug-row">
+          <span>Candidate models</span>
+          <strong>{debug?.candidate_models?.join(", ") || "-"}</strong>
+        </div>
         {debug?.model_errors?.length ? <pre className="debug-pre">{debug.model_errors.join("\n")}</pre> : null}
       </div>
     );
@@ -1064,8 +1102,10 @@ export default function Chat() {
   function renderComposer(extraClassName: string) {
     const micLabel = voicePhase === "recording" ? "Done recording" : "Start voice input";
 
+    const composerRef = extraClassName.includes("composer-fixed") ? composerFixedRef : undefined;
+
     return (
-      <div className={`composer ${extraClassName}`} aria-label="Message composer">
+      <div className={`composer ${extraClassName}`} aria-label="Message composer" ref={composerRef}>
         <div className={`composer-bar ${busy ? "is-busy" : ""} ${isVoiceActive ? "has-voice" : ""}`}>
           {renderVoiceStatus()}
 
@@ -1109,16 +1149,17 @@ export default function Chat() {
             </div>
           </div>
         </div>
-
-        <div className="composer-hint">
-          Enter to send • Shift+Enter for newline • Mic records until Done, then transcribes and sends
-        </div>
       </div>
     );
   }
 
   return (
-    <div className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"}`}>
+    <div
+      className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"}`}
+      data-mode={appMode}
+      data-voice-phase={voicePhase}
+      style={{ "--composer-height": `${composerHeight}px` } as React.CSSProperties}
+    >
       {hasUserMessages ? (
         <>
           <div className="chat-actions">
@@ -1129,7 +1170,7 @@ export default function Chat() {
               Export
             </button>
             <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn debug-toggle" type="button">
-              Status
+              Model details
             </button>
           </div>
 
@@ -1141,7 +1182,7 @@ export default function Chat() {
                 {messages.map((m, idx) => {
                   const isPending = busy && idx === messages.length - 1 && m.role === "user";
                   return (
-                    <div key={`${m.ts}-${idx}`} className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}>
+                    <div key={`${m.ts}-${idx}`} className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`} style={{ "--bubble-index": idx } as React.CSSProperties}>
                       <div className="bubble-text">{m.content}</div>
                       <div className="meta">{m.ts}</div>
                     </div>
@@ -1173,8 +1214,8 @@ export default function Chat() {
         <>
           <div className="hero">
             <div className="hero-copy">
-              <div className="hero-kicker">✨ Hi</div>
-              <h1 className="hero-title">Meet my AI twin</h1>
+              <div className="hero-kicker"><span className="sparkle" aria-hidden="true">✨</span> Hi</div>
+              <h1 className="hero-title"><span>Meet my AI twin</span></h1>
               <p className="hero-subtitle">
                 Ask interview-style questions about projects, deep RL, strengths, growth areas — it replies like I would.
               </p>
@@ -1188,13 +1229,6 @@ export default function Chat() {
               <button className="chip" type="button" onClick={() => fillPrompt("What are the top 3 areas you’d like to grow in?")}>What are the top 3 areas you’d like to grow in?</button>
               <button className="chip" type="button" onClick={() => fillPrompt("What misconception do your coworkers have about you?")}>What misconception do your coworkers have about you?</button>
             </div>
-          </div>
-
-          <div className="landing-footer">
-            <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn" type="button">
-              Status
-            </button>
-            {debugOpen ? renderDebugPanel("landing-debug-panel") : null}
           </div>
         </>
       )}

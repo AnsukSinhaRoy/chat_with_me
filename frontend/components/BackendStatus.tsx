@@ -16,7 +16,6 @@ function healthUrl() {
 
 export default function BackendStatus() {
   const [state, setState] = useState<BackendState>(API_BASE ? "checking" : "missing");
-  const [detail, setDetail] = useState(API_BASE ? "Checking backend…" : "NEXT_PUBLIC_API_BASE_URL is not set");
 
   useEffect(() => {
     if (!API_BASE) return;
@@ -35,23 +34,13 @@ export default function BackendStatus() {
           signal: controller.signal,
         });
 
-        if (!response.ok) {
-          throw new Error(`Health check returned ${response.status}`);
-        }
-
+        if (!response.ok) throw new Error(`Health check returned ${response.status}`);
         const data = await response.json().catch(() => null);
         if (!data?.ok) throw new Error("Health check did not return ok=true");
 
-        if (!cancelled) {
-          setState("online");
-          setDetail(`Backend online: ${API_BASE}`);
-        }
-      } catch (error: unknown) {
-        if (!cancelled) {
-          const message = error instanceof Error ? error.message : "Backend health check failed";
-          setState("offline");
-          setDetail(`${message}. Check backend URL and CORS.`);
-        }
+        if (!cancelled) setState("online");
+      } catch {
+        if (!cancelled) setState("offline");
       } finally {
         window.clearTimeout(timeout);
       }
@@ -66,19 +55,19 @@ export default function BackendStatus() {
     };
   }, []);
 
-  const label =
-    state === "online"
-      ? "Backend online"
-      : state === "checking"
-        ? "Checking backend"
-        : state === "missing"
-          ? "Backend not configured"
-          : "Backend offline";
+  const offline = state === "offline" || state === "missing";
+  const label = offline ? "backend offline" : state === "checking" ? "checking connection" : "online";
 
   return (
-    <div className={`status-pill status-${state}`} title={detail} aria-live="polite">
-      <span className="status-dot" aria-hidden="true" />
-      <span>{label}</span>
-    </div>
+    <span
+      className={`brand-status-wrap ${offline ? "has-tooltip" : ""}`.trim()}
+      data-tooltip={offline ? "backend offline" : undefined}
+    >
+      <span
+        className={`brand-status-dot status-${state}`}
+        aria-label={label}
+        title={offline ? "backend offline" : label}
+      />
+    </span>
   );
 }

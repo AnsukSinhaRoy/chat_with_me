@@ -1,14 +1,23 @@
 import "./globals.css";
 import Chat from "../components/Chat";
 import BackendStatus from "../components/BackendStatus";
+import ThemeToggle from "../components/ThemeToggle";
 
 export default function Page() {
   return (
     <main className="app">
+      <div className="ambient-stage" aria-hidden="true">
+        <div className="ambient-orb ambient-orb-one" />
+        <div className="ambient-orb ambient-orb-two" />
+        <div className="ambient-orb ambient-orb-three" />
+        <div className="ambient-grid" />
+        <div className="ambient-vignette" />
+      </div>
+
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <div className="brand-dot" aria-hidden="true" />
+            <BackendStatus />
             <div>
               <div className="brand-title">Talk to Ansuk</div>
               <div className="brand-subtitle">
@@ -16,7 +25,7 @@ export default function Page() {
               </div>
             </div>
           </div>
-          <BackendStatus />
+          <ThemeToggle />
         </div>
       </header>
 

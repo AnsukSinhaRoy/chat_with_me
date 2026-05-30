@@ -32,6 +32,8 @@ class ChatResponse(BaseModel):
     used_model: Optional[str] = None
     last_tried_model: Optional[str] = None
     model_errors: List[str] = Field(default_factory=list)
+    mode_detail: Optional[str] = None
+    candidate_models: List[str] = Field(default_factory=list)
     hops_used: int = 0
     history_sig: Optional[str] = None
 

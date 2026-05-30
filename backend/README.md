@@ -13,9 +13,14 @@ Recommended Vercel settings:
 Environment variables:
 
 ```text
-OPENAI_API_KEY=your_key
+GEMINI_API_KEY=your_key
+# Or: GEMINI_API_KEYS=key_1,key_2,key_3
 CORS_ORIGINS=https://your-frontend-vercel-domain
 APP_MODE=quota_saver
+
+# Optional mode-specific model overrides
+GEMINI_QUOTA_SAVER_MODEL_CANDIDATES=gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.0-flash-lite
+GEMINI_QUALITY_MODEL_CANDIDATES=gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-2.5-flash
 ```
 
 After deployment, check:

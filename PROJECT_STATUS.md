@@ -63,6 +63,6 @@ The previous package failed on Vercel because the repository root had no `packag
 
 ## Remaining honest limitations
 
-- I did not test live OpenAI chat/transcription because that requires a real `OPENAI_API_KEY` at runtime.
+- I did not test live Gemini chat/transcription because that requires a real `GEMINI_API_KEY` at runtime.
 - I did not update `profile_chunks.json` content yet, because you said you will share detailed personal documents later.
 - Browser speech recognition support differs by browser. Chrome/Edge usually work best; Safari/Firefox may rely more on backend transcription.
