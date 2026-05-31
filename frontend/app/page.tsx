@@ -1,7 +1,6 @@
 import "./globals.css";
 import Chat from "../components/Chat";
 import BackendStatus from "../components/BackendStatus";
-import ThemeToggle from "../components/ThemeToggle";
 
 export default function Page() {
   return (
@@ -17,15 +16,21 @@ export default function Page() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <BackendStatus />
-            <div>
+            <div className="brand-logo-wrap">
+              <span className="brand-logo">
+                <span className="brand-logo-core">A</span>
+                <span className="brand-logo-orbit brand-logo-orbit-one" />
+                <span className="brand-logo-orbit brand-logo-orbit-two" />
+              </span>
+              <BackendStatus />
+            </div>
+            <div className="brand-copy">
               <div className="brand-title">Talk to Ansuk</div>
               <div className="brand-subtitle">
                 Applied ML • Deep RL • Fintech
               </div>
             </div>
           </div>
-          <ThemeToggle />
         </div>
       </header>
 

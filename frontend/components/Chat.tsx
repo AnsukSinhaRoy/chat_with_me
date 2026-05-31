@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import ThemeToggle from "./ThemeToggle";
 
 type Role = "user" | "assistant";
 type AppMode = "quota_saver" | "quality";
@@ -11,6 +13,14 @@ type Message = {
   role: Role;
   content: string;
   ts: string;
+};
+
+type SavedConversation = {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 type ChatResponse = {
@@ -32,6 +42,11 @@ const WAVE_BAR_COUNT = 32;
 const MAX_TEXTAREA_PX = 160;
 const MAX_RECORDING_MS = 22_000;
 const SILENCE_STOP_MS = 1_150;
+const CHAT_HISTORY_STORAGE_KEY = "talk_to_ansuk_chat_history_v1";
+const MAX_SAVED_CONVERSATIONS = 30;
+const DEFAULT_ASSISTANT_GREETING =
+  "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever.";
+const FRESH_ASSISTANT_GREETING = "Fresh slate. Hit me with your best interview question.";
 
 const CONFIGURED_API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE_URL || "");
 const VOICE_TRANSCRIPTION_MODE = normalizeVoiceTranscriptionMode(process.env.NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE);
@@ -122,6 +137,90 @@ function hhmm() {
 
 function makeMsg(role: Role, content: string): Message {
   return { role, content, ts: hhmm() };
+}
+
+function makeConversationId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `conv_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function cleanConversationTitle(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function conversationTitle(messages: Message[]) {
+  const firstUserMessage = messages.find((message) => message.role === "user")?.content || "";
+  const title = cleanConversationTitle(firstUserMessage);
+  if (!title) return "New conversation";
+  return title.length > 62 ? `${title.slice(0, 59)}…` : title;
+}
+
+function conversationPreview(messages: Message[]) {
+  const lastMeaningfulMessage = [...messages].reverse().find((message) => message.content.trim());
+  const preview = cleanConversationTitle(lastMeaningfulMessage?.content || "No messages yet");
+  return preview.length > 92 ? `${preview.slice(0, 89)}…` : preview;
+}
+
+function hasUserMessage(messages: Message[]) {
+  return messages.some((message) => message.role === "user" && message.content.trim());
+}
+
+function isValidMessage(value: unknown): value is Message {
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as Message;
+  return (
+    (candidate.role === "user" || candidate.role === "assistant") &&
+    typeof candidate.content === "string" &&
+    typeof candidate.ts === "string"
+  );
+}
+
+function normalizeStoredConversations(value: unknown): SavedConversation[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+
+      const candidate = item as Partial<SavedConversation>;
+      const messages = Array.isArray(candidate.messages) ? candidate.messages.filter(isValidMessage) : [];
+      if (!candidate.id || typeof candidate.id !== "string" || !hasUserMessage(messages)) return null;
+
+      const createdAt = typeof candidate.createdAt === "string" ? candidate.createdAt : new Date().toISOString();
+      const updatedAt = typeof candidate.updatedAt === "string" ? candidate.updatedAt : createdAt;
+
+      return {
+        id: candidate.id,
+        title: typeof candidate.title === "string" && candidate.title.trim() ? candidate.title : conversationTitle(messages),
+        messages,
+        createdAt,
+        updatedAt,
+      };
+    })
+    .filter((item): item is SavedConversation => Boolean(item))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, MAX_SAVED_CONVERSATIONS);
+}
+
+function formatConversationTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const now = new Date();
+  const isSameDay = date.toDateString() === now.toDateString();
+  if (isSameDay) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function isMobileViewport() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 840px)").matches;
 }
 
 function normalizeAppMode(value: unknown): AppMode {
@@ -712,6 +811,51 @@ function MessageContent({ role, content }: Message) {
   return <div className="bubble-text markdown-message">{renderMarkdownBlocks(content)}</div>;
 }
 
+
+function SidebarGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3" y="4" width="18" height="16" rx="4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M9 4v16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M6 8h.01M6 12h.01M6 16h.01" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function NewChatGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 19h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M7 15.5 16.7 5.8a2.1 2.1 0 0 1 3 3L10 18.5 6 19l1-3.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChatGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5.5 17.5A7.3 7.3 0 1 1 9 20l-4 1 1-3.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SettingsGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M19.4 13.5a7.7 7.7 0 0 0 .05-1.5l1.7-1.3-1.9-3.2-2 .8a7.1 7.1 0 0 0-1.3-.75L15.6 5h-3.7l-.35 2.55c-.46.2-.9.45-1.3.75l-2-.8-1.9 3.2L8.05 12a7.7 7.7 0 0 0 .05 1.5l-1.75 1.35 1.9 3.2 2.08-.84c.38.28.8.51 1.24.7L11.9 20h3.7l.33-2.1c.45-.19.86-.43 1.25-.7l2.07.84 1.9-3.2-1.75-1.34Z" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TrashGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 7h14M10 11v6M14 11v6M9 7l.6-2h4.8L15 7M7 7l.7 13h8.6L17 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function Chat() {
   const DEFAULT_MODE = normalizeAppMode(process.env.NEXT_PUBLIC_APP_MODE);
 
@@ -719,13 +863,18 @@ export default function Chat() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const [messages, setMessages] = useState<Message[]>([
-    makeMsg(
-      "assistant",
-      "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever."
-    ),
-  ]);
+  const [messages, setMessages] = useState<Message[]>(() => [makeMsg("assistant", DEFAULT_ASSISTANT_GREETING)]);
   const messagesRef = useRef<Message[]>(messages);
+
+  const [conversations, setConversations] = useState<SavedConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [portalReady, setPortalReady] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
 
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -767,6 +916,10 @@ export default function Chat() {
   const [keyboardInset, setKeyboardInset] = useState(0);
 
   const hasUserMessages = useMemo(() => messages.some((m) => m.role === "user"), [messages]);
+  const sortedConversations = useMemo(
+    () => [...conversations].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
+    [conversations]
+  );
   const latestUserMessageIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       if (messages[i].role === "user") return i;
@@ -785,6 +938,10 @@ export default function Chat() {
   const isVoiceActive = voicePhase !== "idle";
 
   useEffect(() => {
+    setPortalReady(true);
+  }, []);
+
+  useEffect(() => {
     try {
       const saved = normalizeAppMode(window.localStorage.getItem("app_mode"));
       setAppMode(saved);
@@ -800,6 +957,66 @@ export default function Chat() {
       // Ignore storage failures; the app still works.
     }
   }, [appMode]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
+      const saved = normalizeStoredConversations(raw ? JSON.parse(raw) : []);
+      setConversations(saved);
+    } catch {
+      setConversations([]);
+    } finally {
+      setHistoryLoaded(true);
+    }
+
+    const mediaQuery = window.matchMedia("(max-width: 840px)");
+    setHistoryOpen(!mediaQuery.matches);
+
+    const onViewportChange = (event: MediaQueryListEvent) => {
+      setHistoryOpen(!event.matches);
+    };
+
+    mediaQuery.addEventListener("change", onViewportChange);
+    return () => mediaQuery.removeEventListener("change", onViewportChange);
+  }, []);
+
+  useEffect(() => {
+    if (!historyLoaded) return;
+
+    try {
+      window.localStorage.setItem(
+        CHAT_HISTORY_STORAGE_KEY,
+        JSON.stringify(sortedConversations.slice(0, MAX_SAVED_CONVERSATIONS))
+      );
+    } catch {
+      // Local storage can fail in private mode or when the quota is full.
+    }
+  }, [historyLoaded, sortedConversations]);
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!historyLoaded || !activeConversationId || !hasUserMessage(messages)) return;
+
+    const now = new Date().toISOString();
+    setConversations((prev) => {
+      const existing = prev.find((conversation) => conversation.id === activeConversationId);
+      const createdAt = existing?.createdAt || now;
+      const updated: SavedConversation = {
+        id: activeConversationId,
+        title: conversationTitle(messages),
+        messages,
+        createdAt,
+        updatedAt: now,
+      };
+
+      return [updated, ...prev.filter((conversation) => conversation.id !== activeConversationId)]
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .slice(0, MAX_SAVED_CONVERSATIONS);
+    });
+  }, [activeConversationId, historyLoaded, messages]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -820,6 +1037,20 @@ export default function Chat() {
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [modeMenuOpen]);
+
+  useEffect(() => {
+    if (!settingsMenuOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (debugOpen || confirmClearOpen) return;
+
+      const menu = settingsMenuRef.current;
+      if (menu && !menu.contains(event.target as Node)) setSettingsMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [settingsMenuOpen, debugOpen, confirmClearOpen]);
 
   useEffect(() => {
     autosizePrompt();
@@ -978,6 +1209,15 @@ export default function Chat() {
     el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_PX ? "auto" : "hidden";
   }
 
+  function ensureActiveConversation() {
+    if (activeConversationIdRef.current) return activeConversationIdRef.current;
+
+    const id = makeConversationId();
+    activeConversationIdRef.current = id;
+    setActiveConversationId(id);
+    return id;
+  }
+
   async function callChat(nextMessages: Message[]) {
     setBusy(true);
     setDebug(null);
@@ -1010,6 +1250,7 @@ export default function Chat() {
     setInput("");
     requestAnimationFrame(() => autosizePrompt());
 
+    ensureActiveConversation();
     const next = [...messagesRef.current, makeMsg("user", text)];
     setMessages(next);
     await callChat(next);
@@ -1055,19 +1296,92 @@ export default function Chat() {
 
     setInput("");
     setVoicePhase("idle");
+    ensureActiveConversation();
     const next = [...messagesRef.current, makeMsg("user", clean)];
     setMessages(next);
     await callChat(next);
   }
 
   function newChat() {
+    if (busy) return;
+
     cleanupRecordingResources();
+    activeConversationIdRef.current = null;
+    setActiveConversationId(null);
     setVoicePhase("idle");
     setTranscriptPreview("");
     setVoiceError("");
-    setMessages([makeMsg("assistant", "Fresh slate. Hit me with your best interview question.")]);
+    setInput("");
+    setMessages([makeMsg("assistant", FRESH_ASSISTANT_GREETING)]);
     setDebug(null);
     setDebugOpen(false);
+
+    if (isMobileViewport()) setHistoryOpen(false);
+  }
+
+  function openConversation(conversation: SavedConversation) {
+    if (busy) return;
+
+    cleanupRecordingResources();
+    activeConversationIdRef.current = conversation.id;
+    setActiveConversationId(conversation.id);
+    setMessages(conversation.messages);
+    setInput("");
+    setVoicePhase("idle");
+    setTranscriptPreview("");
+    setVoiceError("");
+    setDebug(null);
+    setDebugOpen(false);
+
+    if (isMobileViewport()) setHistoryOpen(false);
+
+    window.requestAnimationFrame(() => {
+      const scroller = chatScrollRef.current;
+      if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
+    });
+  }
+
+  function deleteConversation(conversationId: string, event: React.MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (busy) return;
+
+    setConversations((prev) => prev.filter((conversation) => conversation.id !== conversationId));
+
+    if (activeConversationIdRef.current === conversationId) {
+      activeConversationIdRef.current = null;
+      setActiveConversationId(null);
+      setMessages([makeMsg("assistant", DEFAULT_ASSISTANT_GREETING)]);
+      setDebug(null);
+      setDebugOpen(false);
+    }
+  }
+
+  function clearAllLocalHistory() {
+    if (busy) return;
+
+    cleanupRecordingResources();
+    setConversations([]);
+    activeConversationIdRef.current = null;
+    setActiveConversationId(null);
+    setMessages([makeMsg("assistant", FRESH_ASSISTANT_GREETING)]);
+    setInput("");
+    setVoicePhase("idle");
+    setTranscriptPreview("");
+    setVoiceError("");
+    setDebug(null);
+    setDebugOpen(false);
+    setConfirmClearOpen(false);
+
+    try {
+      window.localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures; the in-memory state is already cleared.
+    }
+
+    if (isMobileViewport()) {
+      setHistoryOpen(false);
+      setSettingsMenuOpen(false);
+    }
   }
 
   function fillPrompt(text: string) {
@@ -1760,6 +2074,269 @@ export default function Chat() {
     );
   }
 
+  function renderMobileHistoryButton() {
+    return (
+      <button
+        className={`ghost-btn history-floating-btn sidebar-icon-button ${historyOpen ? "is-hidden" : ""}`}
+        type="button"
+        onClick={() => setHistoryOpen(true)}
+        aria-label="Open chat history"
+        aria-expanded={historyOpen}
+        title="Chat history"
+      >
+        <SidebarGlyph />
+      </button>
+    );
+  }
+
+  function renderHistorySidebar() {
+    const toggleLabel = historyOpen ? "Close chat history" : "Open chat history";
+
+    const openSettingsFromRail = () => {
+      setHistoryOpen(true);
+      setSettingsMenuOpen(true);
+    };
+
+    return (
+      <>
+        {portalReady ? createPortal(renderMobileHistoryButton(), document.body) : null}
+
+        <div
+          className={`history-backdrop ${historyOpen ? "is-open" : ""}`}
+          onClick={() => setHistoryOpen(false)}
+          aria-hidden="true"
+        />
+
+        <aside className={`history-sidebar ${historyOpen ? "is-open" : ""}`} aria-label="Chat history">
+          <div className="history-rail" aria-label="Sidebar shortcuts">
+            <div className="history-rail-top">
+              <button
+                className="history-rail-btn"
+                type="button"
+                onClick={() => setHistoryOpen((value) => !value)}
+                aria-label={toggleLabel}
+                title={toggleLabel}
+              >
+                <SidebarGlyph />
+              </button>
+              <button
+                className="history-rail-btn"
+                type="button"
+                onClick={newChat}
+                aria-label="New chat"
+                title="New chat"
+                disabled={busy}
+              >
+                <NewChatGlyph />
+              </button>
+              <button
+                className="history-rail-btn"
+                type="button"
+                onClick={() => setHistoryOpen(true)}
+                aria-label="Show saved conversations"
+                title="Saved conversations"
+              >
+                <ChatGlyph />
+              </button>
+            </div>
+
+            <button
+              className="history-rail-btn history-rail-settings"
+              type="button"
+              onClick={openSettingsFromRail}
+              aria-label="Open settings"
+              title="Settings"
+            >
+              <SettingsGlyph />
+            </button>
+          </div>
+
+          <div className="history-panel">
+            <div className="history-sidebar-header">
+              <div className="history-heading">
+                <span className="history-heading-icon" aria-hidden="true"><SidebarGlyph /></span>
+                <div>
+                  <div className="history-title">Chat history</div>
+                  <div className="history-subtitle">Saved on this device</div>
+                </div>
+              </div>
+              <button
+                className="history-close-btn"
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                aria-label="Close chat history"
+                title="Close sidebar"
+              >
+                <SidebarGlyph />
+              </button>
+            </div>
+
+            <button className="history-new-chat-btn" type="button" onClick={newChat} disabled={busy}>
+              <NewChatGlyph />
+              <span>New chat</span>
+            </button>
+
+            <div className="history-list-shell">
+              <div className="history-section-label">Previous conversations</div>
+
+              <div className="history-list" role="list">
+                {sortedConversations.length ? (
+                  sortedConversations.map((conversation) => {
+                    const isActive = conversation.id === activeConversationId;
+
+                    return (
+                      <div
+                        key={conversation.id}
+                        className={`history-item ${isActive ? "is-active" : ""}`}
+                        role="listitem"
+                        aria-current={isActive ? "true" : undefined}
+                      >
+                        <button
+                          className="history-item-open"
+                          type="button"
+                          onClick={() => openConversation(conversation)}
+                          disabled={busy}
+                        >
+                          <span className="history-item-title">{conversation.title}</span>
+                          <span className="history-item-preview">{conversationPreview(conversation.messages)}</span>
+                        </button>
+                        <span className="history-item-meta">
+                          <span>{formatConversationTime(conversation.createdAt)}</span>
+                          <button
+                            className="history-delete-btn"
+                            type="button"
+                            onClick={(event) => deleteConversation(conversation.id, event)}
+                            aria-label={`Delete ${conversation.title}`}
+                            title="Delete conversation"
+                            disabled={busy}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="history-empty">
+                    Conversations will appear here after you send your first message.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="history-settings" aria-label="Sidebar settings" ref={settingsMenuRef}>
+              <button
+                className={`history-settings-trigger ${settingsMenuOpen ? "is-open" : ""}`}
+                type="button"
+                onClick={() => setSettingsMenuOpen((value) => !value)}
+                aria-haspopup="menu"
+                aria-expanded={settingsMenuOpen}
+              >
+                <span className="history-settings-trigger-main">
+                  <span className="history-settings-icon" aria-hidden="true"><SettingsGlyph /></span>
+                  <span>
+                    <span className="history-settings-title">Settings</span>
+                    <span className="history-settings-subtitle">Theme, model details, local data</span>
+                  </span>
+                </span>
+                <span className="history-settings-chevron" aria-hidden="true">▾</span>
+              </button>
+
+              {settingsMenuOpen ? (
+                <div className="settings-dropdown" role="menu" aria-label="Settings options">
+                  <div className="settings-dropdown-row" role="menuitem">
+                    <div>
+                      <div className="settings-option-title">Theme</div>
+                      <div className="settings-option-subtitle">Toggle light or dark</div>
+                    </div>
+                    <ThemeToggle />
+                  </div>
+
+                  <button
+                    className="settings-dropdown-action"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => setDebugOpen(true)}
+                  >
+                    <span>Model details</span>
+                    <span className="settings-action-hint">Open</span>
+                  </button>
+
+                  <button
+                    className="settings-dropdown-action is-danger"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => setConfirmClearOpen(true)}
+                    disabled={!sortedConversations.length && !hasUserMessages}
+                  >
+                    <span>Delete all memory</span>
+                    <span className="settings-action-hint">Local only</span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </aside>
+
+        {debugOpen ? (
+          <div className="app-modal-backdrop" role="presentation" onClick={() => setDebugOpen(false)}>
+            <section
+              className="app-modal model-details-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Model details"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="app-modal-header">
+                <div>
+                  <div className="app-modal-title">Model details</div>
+                  <div className="app-modal-subtitle">Runtime information from the latest response</div>
+                </div>
+                <button className="app-modal-close" type="button" onClick={() => setDebugOpen(false)} aria-label="Close model details">
+                  ×
+                </button>
+              </div>
+              {renderDebugPanel("model-modal-debug-panel")}
+            </section>
+          </div>
+        ) : null}
+
+        {confirmClearOpen ? (
+          <div className="app-modal-backdrop" role="presentation" onClick={() => setConfirmClearOpen(false)}>
+            <section
+              className="app-modal confirm-clear-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Delete all local chat history"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="app-modal-header">
+                <div>
+                  <div className="app-modal-title">Delete all memory?</div>
+                  <div className="app-modal-subtitle">This removes only the chats saved on this device.</div>
+                </div>
+                <button className="app-modal-close" type="button" onClick={() => setConfirmClearOpen(false)} aria-label="Cancel deletion">
+                  ×
+                </button>
+              </div>
+              <p className="confirm-clear-copy">
+                This cannot be undone. Your current conversation and all saved local conversations will be cleared.
+              </p>
+              <div className="confirm-clear-actions">
+                <button className="confirm-clear-cancel" type="button" onClick={() => setConfirmClearOpen(false)}>
+                  Cancel
+                </button>
+                <button className="confirm-clear-delete" type="button" onClick={clearAllLocalHistory}>
+                  Delete all
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
   function renderDebugPanel(extraClassName = "") {
     return (
       <div className={`debug-panel ${extraClassName}`.trim()}>
@@ -1849,23 +2426,28 @@ export default function Chat() {
 
   return (
     <div
-      className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"}`}
+      className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"} ${historyOpen ? "history-open" : ""}`}
       data-mode={appMode}
       data-voice-phase={voicePhase}
       style={{ "--composer-height": `${composerHeight}px`, "--keyboard-inset": `${keyboardInset}px` } as React.CSSProperties}
     >
+      {renderHistorySidebar()}
+
+      <div className="chat-main">
       {hasUserMessages ? (
         <>
           <div className="chat-actions">
-            <button onClick={newChat} className="ghost-btn" type="button">
-              New chat
-            </button>
-            <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn debug-toggle" type="button">
-              Model details
+            <button
+              onClick={() => setHistoryOpen((value) => !value)}
+              className="ghost-btn history-chat-toggle sidebar-icon-button"
+              type="button"
+              aria-expanded={historyOpen}
+              aria-label="Open chat history"
+              title="Chat history"
+            >
+              <SidebarGlyph />
             </button>
           </div>
-
-          {debugOpen ? renderDebugPanel() : null}
 
           <div className="chat-scroll-outer" ref={chatScrollRef}>
             <div className="chat-scroll-inner">
@@ -1933,6 +2515,7 @@ export default function Chat() {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

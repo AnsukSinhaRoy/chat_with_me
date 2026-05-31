@@ -3,6 +3,9 @@ import type { Metadata, Viewport } from "next";
 export const metadata: Metadata = {
   title: "Talk to Ansuk",
   description: "Interview-style chat with Ansuk's AI twin.",
+  icons: {
+    icon: "/logo.svg",
+  },
 };
 
 export const viewport: Viewport = {
