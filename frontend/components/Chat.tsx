@@ -6,7 +6,12 @@ import ThemeToggle from "./ThemeToggle";
 
 type Role = "user" | "assistant";
 type AppMode = "quota_saver" | "quality";
-type VoicePhase = "idle" | "requesting" | "recording" | "stopping" | "transcribing";
+type VoicePhase =
+  | "idle"
+  | "requesting"
+  | "recording"
+  | "stopping"
+  | "transcribing";
 type VoiceTranscriptionMode = "browser" | "backend";
 
 type Message = {
@@ -33,6 +38,10 @@ type ChatResponse = {
   hops_used?: number;
 };
 
+type ChatCallOptions = {
+  autoSpeakResponse?: boolean;
+};
+
 type SpeechBuffer = {
   finalSegments: Record<number, string>;
   interimSegments: Record<number, string>;
@@ -46,26 +55,39 @@ const CHAT_HISTORY_STORAGE_KEY = "talk_to_ansuk_chat_history_v1";
 const MAX_SAVED_CONVERSATIONS = 30;
 const DEFAULT_ASSISTANT_GREETING =
   "Hey — I’m Ansuk. Ask me anything interview-style: projects, RL, strengths, growth areas, whatever.";
-const FRESH_ASSISTANT_GREETING = "Fresh slate. Hit me with your best interview question.";
+const FRESH_ASSISTANT_GREETING =
+  "Fresh slate. Hit me with your best interview question.";
 
-const CONFIGURED_API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE_URL || "");
-const VOICE_TRANSCRIPTION_MODE = normalizeVoiceTranscriptionMode(process.env.NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE);
+const CONFIGURED_API_BASE = normalizeApiBase(
+  process.env.NEXT_PUBLIC_API_BASE_URL || "",
+);
+const VOICE_TRANSCRIPTION_MODE = normalizeVoiceTranscriptionMode(
+  process.env.NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE,
+);
 const BROWSER_STT_LANG = process.env.NEXT_PUBLIC_BROWSER_STT_LANG || "en-IN";
-const REQUIRE_LOCAL_BROWSER_STT = process.env.NEXT_PUBLIC_BROWSER_STT_PROCESS_LOCALLY === "true";
+const REQUIRE_LOCAL_BROWSER_STT =
+  process.env.NEXT_PUBLIC_BROWSER_STT_PROCESS_LOCALLY === "true";
 const AUTO_SEND_VOICE = process.env.NEXT_PUBLIC_AUTO_SEND_VOICE !== "false";
 
 function normalizeApiBase(value: string) {
-  return value.trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+  return value
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/api$/i, "");
 }
 
-function normalizeVoiceTranscriptionMode(value: unknown): VoiceTranscriptionMode {
-  return String(value || "").toLowerCase() === "backend" ? "backend" : "browser";
+function normalizeVoiceTranscriptionMode(
+  value: unknown,
+): VoiceTranscriptionMode {
+  return String(value || "").toLowerCase() === "backend"
+    ? "backend"
+    : "browser";
 }
 
 function buildApiUrl(path: string) {
   if (!CONFIGURED_API_BASE) {
     throw new Error(
-      "Chat service is not configured. Set NEXT_PUBLIC_API_BASE_URL in the frontend deployment, then redeploy."
+      "Chat service is not configured. Set NEXT_PUBLIC_API_BASE_URL in the frontend deployment, then redeploy.",
     );
   }
 
@@ -80,25 +102,32 @@ function stringifyServerMessage(raw: string) {
     const parsed = JSON.parse(text);
     const detail = parsed?.detail || parsed?.error || parsed?.message;
     if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) return detail.map((item) => item?.msg || JSON.stringify(item)).join("; ");
-    if (parsed?.code === "NOT_FOUND" || parsed?.errorCode === "NOT_FOUND") return "Vercel returned NOT_FOUND.";
+    if (Array.isArray(detail))
+      return detail.map((item) => item?.msg || JSON.stringify(item)).join("; ");
+    if (parsed?.code === "NOT_FOUND" || parsed?.errorCode === "NOT_FOUND")
+      return "Vercel returned NOT_FOUND.";
   } catch {
     // Fall through to text checks below.
   }
 
-  if (/NOT_FOUND/i.test(text) || /page could not be found/i.test(text)) return "Vercel returned NOT_FOUND.";
-  if (/<html|<!doctype/i.test(text)) return "The server returned an HTML error page instead of JSON.";
+  if (/NOT_FOUND/i.test(text) || /page could not be found/i.test(text))
+    return "Vercel returned NOT_FOUND.";
+  if (/<html|<!doctype/i.test(text))
+    return "The server returned an HTML error page instead of JSON.";
   return text.slice(0, 360);
 }
 
-async function responseErrorMessage(response: Response, area: "chat" | "transcription" | "health") {
+async function responseErrorMessage(
+  response: Response,
+  area: "chat" | "transcription" | "health",
+) {
   const raw = await response.text().catch(() => "");
   const detail = stringifyServerMessage(raw);
 
   if (response.status === 404) {
     return (
       "Backend route not found. This usually means the frontend is calling the wrong Vercel project/domain. " +
-      "Set NEXT_PUBLIC_API_BASE_URL to the backend domain, and confirm that the backend /healthz route returns {\"ok\":true}."
+      'Set NEXT_PUBLIC_API_BASE_URL to the backend domain, and confirm that the backend /healthz route returns {"ok":true}.'
     );
   }
 
@@ -110,14 +139,25 @@ async function responseErrorMessage(response: Response, area: "chat" | "transcri
     return "The audio file was too large for the backend. Record a shorter clip and try again.";
   }
 
-  const prefix = area === "chat" ? "Chat request failed" : area === "transcription" ? "Transcription failed" : "Connection check failed";
+  const prefix =
+    area === "chat"
+      ? "Chat request failed"
+      : area === "transcription"
+        ? "Transcription failed"
+        : "Connection check failed";
   return `${prefix} (${response.status}). ${detail || response.statusText || "No useful error message returned."}`;
 }
 
 function friendlyRequestError(error: unknown, area: "chat" | "transcription") {
-  const message = error instanceof Error ? error.message : String(error || "Request failed");
+  const message =
+    error instanceof Error ? error.message : String(error || "Request failed");
 
-  if (/Chat service is not configured|Backend URL is not configured/i.test(message)) return message;
+  if (
+    /Chat service is not configured|Backend URL is not configured/i.test(
+      message,
+    )
+  )
+    return message;
   if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
     return (
       "Could not reach the backend. Check NEXT_PUBLIC_API_BASE_URL in the frontend deployment and CORS_ORIGINS in the backend deployment. " +
@@ -139,8 +179,15 @@ function makeMsg(role: Role, content: string): Message {
   return { role, content, ts: hhmm() };
 }
 
+function messageSpeechKey(message: Message, index: number) {
+  return `${message.role}-${message.ts}-${index}`;
+}
+
 function makeConversationId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return crypto.randomUUID();
   }
 
@@ -152,20 +199,27 @@ function cleanConversationTitle(value: string) {
 }
 
 function conversationTitle(messages: Message[]) {
-  const firstUserMessage = messages.find((message) => message.role === "user")?.content || "";
+  const firstUserMessage =
+    messages.find((message) => message.role === "user")?.content || "";
   const title = cleanConversationTitle(firstUserMessage);
   if (!title) return "New conversation";
   return title.length > 62 ? `${title.slice(0, 59)}…` : title;
 }
 
 function conversationPreview(messages: Message[]) {
-  const lastMeaningfulMessage = [...messages].reverse().find((message) => message.content.trim());
-  const preview = cleanConversationTitle(lastMeaningfulMessage?.content || "No messages yet");
+  const lastMeaningfulMessage = [...messages]
+    .reverse()
+    .find((message) => message.content.trim());
+  const preview = cleanConversationTitle(
+    lastMeaningfulMessage?.content || "No messages yet",
+  );
   return preview.length > 92 ? `${preview.slice(0, 89)}…` : preview;
 }
 
 function hasUserMessage(messages: Message[]) {
-  return messages.some((message) => message.role === "user" && message.content.trim());
+  return messages.some(
+    (message) => message.role === "user" && message.content.trim(),
+  );
 }
 
 function isValidMessage(value: unknown): value is Message {
@@ -187,15 +241,31 @@ function normalizeStoredConversations(value: unknown): SavedConversation[] {
       if (!item || typeof item !== "object") return null;
 
       const candidate = item as Partial<SavedConversation>;
-      const messages = Array.isArray(candidate.messages) ? candidate.messages.filter(isValidMessage) : [];
-      if (!candidate.id || typeof candidate.id !== "string" || !hasUserMessage(messages)) return null;
+      const messages = Array.isArray(candidate.messages)
+        ? candidate.messages.filter(isValidMessage)
+        : [];
+      if (
+        !candidate.id ||
+        typeof candidate.id !== "string" ||
+        !hasUserMessage(messages)
+      )
+        return null;
 
-      const createdAt = typeof candidate.createdAt === "string" ? candidate.createdAt : new Date().toISOString();
-      const updatedAt = typeof candidate.updatedAt === "string" ? candidate.updatedAt : createdAt;
+      const createdAt =
+        typeof candidate.createdAt === "string"
+          ? candidate.createdAt
+          : new Date().toISOString();
+      const updatedAt =
+        typeof candidate.updatedAt === "string"
+          ? candidate.updatedAt
+          : createdAt;
 
       return {
         id: candidate.id,
-        title: typeof candidate.title === "string" && candidate.title.trim() ? candidate.title : conversationTitle(messages),
+        title:
+          typeof candidate.title === "string" && candidate.title.trim()
+            ? candidate.title
+            : conversationTitle(messages),
         messages,
         createdAt,
         updatedAt,
@@ -220,15 +290,23 @@ function formatConversationTime(value: string) {
 }
 
 function isMobileViewport() {
-  return typeof window !== "undefined" && window.matchMedia("(max-width: 840px)").matches;
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(max-width: 840px)").matches
+  );
 }
 
 function normalizeAppMode(value: unknown): AppMode {
-  return String(value || "").toLowerCase() === "quality" ? "quality" : "quota_saver";
+  return String(value || "").toLowerCase() === "quality"
+    ? "quality"
+    : "quota_saver";
 }
 
 function initialWaveLevels() {
-  return Array.from({ length: WAVE_BAR_COUNT }, (_, i) => 0.12 + ((i % 5) * 0.018));
+  return Array.from(
+    { length: WAVE_BAR_COUNT },
+    (_, i) => 0.12 + (i % 5) * 0.018,
+  );
 }
 
 function buildWaveLevels(rms: number) {
@@ -249,22 +327,146 @@ function parseLinkToken(token: string) {
 }
 
 const SUBSCRIPT_CHARS: Record<string, string> = {
-  "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
-  "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
-  a: "ₐ", e: "ₑ", h: "ₕ", i: "ᵢ", j: "ⱼ", k: "ₖ", l: "ₗ", m: "ₘ", n: "ₙ", o: "ₒ", p: "ₚ", r: "ᵣ", s: "ₛ", t: "ₜ", u: "ᵤ", v: "ᵥ", x: "ₓ",
-  A: "ₐ", E: "ₑ", H: "ₕ", I: "ᵢ", J: "ⱼ", K: "ₖ", L: "ₗ", M: "ₘ", N: "ₙ", O: "ₒ", P: "ₚ", R: "ᵣ", S: "ₛ", T: "ₜ", U: "ᵤ", V: "ᵥ", X: "ₓ",
+  "0": "₀",
+  "1": "₁",
+  "2": "₂",
+  "3": "₃",
+  "4": "₄",
+  "5": "₅",
+  "6": "₆",
+  "7": "₇",
+  "8": "₈",
+  "9": "₉",
+  "+": "₊",
+  "-": "₋",
+  "=": "₌",
+  "(": "₍",
+  ")": "₎",
+  a: "ₐ",
+  e: "ₑ",
+  h: "ₕ",
+  i: "ᵢ",
+  j: "ⱼ",
+  k: "ₖ",
+  l: "ₗ",
+  m: "ₘ",
+  n: "ₙ",
+  o: "ₒ",
+  p: "ₚ",
+  r: "ᵣ",
+  s: "ₛ",
+  t: "ₜ",
+  u: "ᵤ",
+  v: "ᵥ",
+  x: "ₓ",
+  A: "ₐ",
+  E: "ₑ",
+  H: "ₕ",
+  I: "ᵢ",
+  J: "ⱼ",
+  K: "ₖ",
+  L: "ₗ",
+  M: "ₘ",
+  N: "ₙ",
+  O: "ₒ",
+  P: "ₚ",
+  R: "ᵣ",
+  S: "ₛ",
+  T: "ₜ",
+  U: "ᵤ",
+  V: "ᵥ",
+  X: "ₓ",
 };
 
 const SUPERSCRIPT_CHARS: Record<string, string> = {
-  "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-  "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
-  a: "ᵃ", b: "ᵇ", c: "ᶜ", d: "ᵈ", e: "ᵉ", f: "ᶠ", g: "ᵍ", h: "ʰ", i: "ⁱ", j: "ʲ", k: "ᵏ", l: "ˡ", m: "ᵐ", n: "ⁿ", o: "ᵒ", p: "ᵖ", r: "ʳ", s: "ˢ", t: "ᵗ", u: "ᵘ", v: "ᵛ", w: "ʷ", x: "ˣ", y: "ʸ", z: "ᶻ",
-  A: "ᴬ", B: "ᴮ", D: "ᴰ", E: "ᴱ", G: "ᴳ", H: "ᴴ", I: "ᴵ", J: "ᴶ", K: "ᴷ", L: "ᴸ", M: "ᴹ", N: "ᴺ", O: "ᴼ", P: "ᴾ", R: "ᴿ", T: "ᵀ", U: "ᵁ", V: "ⱽ", W: "ᵂ",
+  "0": "⁰",
+  "1": "¹",
+  "2": "²",
+  "3": "³",
+  "4": "⁴",
+  "5": "⁵",
+  "6": "⁶",
+  "7": "⁷",
+  "8": "⁸",
+  "9": "⁹",
+  "+": "⁺",
+  "-": "⁻",
+  "=": "⁼",
+  "(": "⁽",
+  ")": "⁾",
+  a: "ᵃ",
+  b: "ᵇ",
+  c: "ᶜ",
+  d: "ᵈ",
+  e: "ᵉ",
+  f: "ᶠ",
+  g: "ᵍ",
+  h: "ʰ",
+  i: "ⁱ",
+  j: "ʲ",
+  k: "ᵏ",
+  l: "ˡ",
+  m: "ᵐ",
+  n: "ⁿ",
+  o: "ᵒ",
+  p: "ᵖ",
+  r: "ʳ",
+  s: "ˢ",
+  t: "ᵗ",
+  u: "ᵘ",
+  v: "ᵛ",
+  w: "ʷ",
+  x: "ˣ",
+  y: "ʸ",
+  z: "ᶻ",
+  A: "ᴬ",
+  B: "ᴮ",
+  D: "ᴰ",
+  E: "ᴱ",
+  G: "ᴳ",
+  H: "ᴴ",
+  I: "ᴵ",
+  J: "ᴶ",
+  K: "ᴷ",
+  L: "ᴸ",
+  M: "ᴹ",
+  N: "ᴺ",
+  O: "ᴼ",
+  P: "ᴾ",
+  R: "ᴿ",
+  T: "ᵀ",
+  U: "ᵁ",
+  V: "ⱽ",
+  W: "ᵂ",
 };
 
 const GREEK_SYMBOLS: Record<string, string> = {
-  alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", eta: "η", theta: "θ", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", phi: "φ", psi: "ψ", omega: "ω",
-  Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  delta: "δ",
+  epsilon: "ε",
+  eta: "η",
+  theta: "θ",
+  kappa: "κ",
+  lambda: "λ",
+  mu: "μ",
+  nu: "ν",
+  pi: "π",
+  rho: "ρ",
+  sigma: "σ",
+  tau: "τ",
+  phi: "φ",
+  psi: "ψ",
+  omega: "ω",
+  Gamma: "Γ",
+  Delta: "Δ",
+  Theta: "Θ",
+  Lambda: "Λ",
+  Sigma: "Σ",
+  Phi: "Φ",
+  Psi: "Ψ",
+  Omega: "Ω",
 };
 
 const LATEX_SYMBOL_COMMANDS: Record<string, string> = {
@@ -330,7 +532,10 @@ const LATEX_SYMBOL_COMMANDS: Record<string, string> = {
 };
 
 function toScript(value: string, table: Record<string, string>) {
-  return value.split("").map((ch) => table[ch] || ch).join("");
+  return value
+    .split("")
+    .map((ch) => table[ch] || ch)
+    .join("");
 }
 
 function readLatexGroup(source: string, startIndex: number) {
@@ -386,13 +591,19 @@ function normalizeLatexExpression(source: string): string {
   const pushWithOptionalParens = (value: string) => {
     const trimmed = value.trim();
     if (!trimmed) return "";
-    return /[ +\-=]/.test(trimmed) && !/^\(.+\)$/.test(trimmed) ? `(${trimmed})` : trimmed;
+    return /[ +\-=]/.test(trimmed) && !/^\(.+\)$/.test(trimmed)
+      ? `(${trimmed})`
+      : trimmed;
   };
 
   while (i < source.length) {
     const ch = source[i];
 
-    const bareCommand = source.slice(i).match(/^(frac|tfrac|dfrac|text|mathrm|operatorname|mathbf|mathit|mathtt|boldsymbol|textrm)\s*(?=\{)/);
+    const bareCommand = source
+      .slice(i)
+      .match(
+        /^(frac|tfrac|dfrac|text|mathrm|operatorname|mathbf|mathit|mathtt|boldsymbol|textrm)\s*(?=\{)/,
+      );
     if (bareCommand) {
       const command = bareCommand[1];
       i += command.length;
@@ -412,8 +623,12 @@ function normalizeLatexExpression(source: string): string {
           continue;
         }
         i = denominator.nextIndex;
-        const numText = pushWithOptionalParens(normalizeLatexExpression(numerator.value));
-        const denText = pushWithOptionalParens(normalizeLatexExpression(denominator.value));
+        const numText = pushWithOptionalParens(
+          normalizeLatexExpression(numerator.value),
+        );
+        const denText = pushWithOptionalParens(
+          normalizeLatexExpression(denominator.value),
+        );
         output += `${numText}/${denText}`;
         continue;
       }
@@ -485,8 +700,12 @@ function normalizeLatexExpression(source: string): string {
           continue;
         }
         i = denominator.nextIndex;
-        const numText = pushWithOptionalParens(normalizeLatexExpression(numerator.value));
-        const denText = pushWithOptionalParens(normalizeLatexExpression(denominator.value));
+        const numText = pushWithOptionalParens(
+          normalizeLatexExpression(numerator.value),
+        );
+        const denText = pushWithOptionalParens(
+          normalizeLatexExpression(denominator.value),
+        );
         output += `${numText}/${denText}`;
         continue;
       }
@@ -502,7 +721,19 @@ function normalizeLatexExpression(source: string): string {
         continue;
       }
 
-      if (["text", "mathrm", "operatorname", "operatorname*", "mathbf", "mathit", "mathtt", "boldsymbol", "textrm"].includes(command)) {
+      if (
+        [
+          "text",
+          "mathrm",
+          "operatorname",
+          "operatorname*",
+          "mathbf",
+          "mathit",
+          "mathtt",
+          "boldsymbol",
+          "textrm",
+        ].includes(command)
+      ) {
         const body = readLatexGroup(source, i);
         if (body) {
           output += normalizeLatexExpression(body.value);
@@ -528,7 +759,10 @@ function normalizeLatexExpression(source: string): string {
     if (ch === "_") {
       const token = readLatexToken(source, i + 1);
       if (token) {
-        output += toScript(normalizeLatexExpression(token.value), SUBSCRIPT_CHARS);
+        output += toScript(
+          normalizeLatexExpression(token.value),
+          SUBSCRIPT_CHARS,
+        );
         i = token.nextIndex;
         continue;
       }
@@ -537,7 +771,10 @@ function normalizeLatexExpression(source: string): string {
     if (ch === "^") {
       const token = readLatexToken(source, i + 1);
       if (token) {
-        output += toScript(normalizeLatexExpression(token.value), SUPERSCRIPT_CHARS);
+        output += toScript(
+          normalizeLatexExpression(token.value),
+          SUPERSCRIPT_CHARS,
+        );
         i = token.nextIndex;
         continue;
       }
@@ -588,7 +825,8 @@ function renderMath(raw: string, display = false) {
 }
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
-  const tokenPattern = /(`[^`\n]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|\\\([^\n]+?\\\)|\$[^$\n]+?\$)/g;
+  const tokenPattern =
+    /(`[^`\n]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|\\\([^\n]+?\\\)|\$[^$\n]+?\$)/g;
   const nodes: React.ReactNode[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
@@ -604,22 +842,32 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
       nodes.push(
         <code key={key} className="markdown-inline-code">
           {token.slice(1, -1)}
-        </code>
+        </code>,
       );
     } else if (token.startsWith("**") && token.endsWith("**")) {
-      nodes.push(<strong key={key}>{renderInlineMarkdown(token.slice(2, -2))}</strong>);
+      nodes.push(
+        <strong key={key}>{renderInlineMarkdown(token.slice(2, -2))}</strong>,
+      );
     } else if (token.startsWith("*") && token.endsWith("*")) {
       nodes.push(<em key={key}>{renderInlineMarkdown(token.slice(1, -1))}</em>);
     } else if (link) {
       nodes.push(
         <a key={key} href={link.href} target="_blank" rel="noreferrer">
           {renderInlineMarkdown(link.label)}
-        </a>
+        </a>,
       );
     } else if (token.startsWith("\\(") && token.endsWith("\\)")) {
-      nodes.push(<React.Fragment key={key}>{renderMath(token.slice(2, -2).trim())}</React.Fragment>);
+      nodes.push(
+        <React.Fragment key={key}>
+          {renderMath(token.slice(2, -2).trim())}
+        </React.Fragment>,
+      );
     } else if (token.startsWith("$") && token.endsWith("$")) {
-      nodes.push(<React.Fragment key={key}>{renderMath(token.slice(1, -1).trim())}</React.Fragment>);
+      nodes.push(
+        <React.Fragment key={key}>
+          {renderMath(token.slice(1, -1).trim())}
+        </React.Fragment>,
+      );
     } else {
       nodes.push(token);
     }
@@ -666,9 +914,12 @@ function renderMarkdownBlocks(markdown: string) {
       if (heading) {
         const level = Math.min(4, heading[1].length);
         const headingContent = renderInlineMarkdown(heading[2]);
-        if (level === 1) blocks.push(<h1 key={nextKey("heading")}>{headingContent}</h1>);
-        else if (level === 2) blocks.push(<h2 key={nextKey("heading")}>{headingContent}</h2>);
-        else if (level === 3) blocks.push(<h3 key={nextKey("heading")}>{headingContent}</h3>);
+        if (level === 1)
+          blocks.push(<h1 key={nextKey("heading")}>{headingContent}</h1>);
+        else if (level === 2)
+          blocks.push(<h2 key={nextKey("heading")}>{headingContent}</h2>);
+        else if (level === 3)
+          blocks.push(<h3 key={nextKey("heading")}>{headingContent}</h3>);
         else blocks.push(<h4 key={nextKey("heading")}>{headingContent}</h4>);
         i += 1;
         continue;
@@ -692,12 +943,18 @@ function renderMarkdownBlocks(markdown: string) {
             i += 1;
           }
         }
-        blocks.push(<div key={nextKey("math")} className="math-display">{renderMath(mathLines.join("\n").trim(), true)}</div>);
+        blocks.push(
+          <div key={nextKey("math")} className="math-display">
+            {renderMath(mathLines.join("\n").trim(), true)}
+          </div>,
+        );
         continue;
       }
 
       if (trimmed.startsWith("\\[") || trimmed.endsWith("\\]")) {
-        const mathLines: string[] = [trimmed.replace(/^\\\[/, "").replace(/\\\]$/, "")];
+        const mathLines: string[] = [
+          trimmed.replace(/^\\\[/, "").replace(/\\\]$/, ""),
+        ];
         i += 1;
         while (i < lines.length && !lines[i].trim().endsWith("\\]")) {
           mathLines.push(lines[i]);
@@ -707,7 +964,11 @@ function renderMarkdownBlocks(markdown: string) {
           mathLines.push(lines[i].trim().replace(/\\\]$/, ""));
           i += 1;
         }
-        blocks.push(<div key={nextKey("math")} className="math-display">{renderMath(mathLines.join("\n").trim(), true)}</div>);
+        blocks.push(
+          <div key={nextKey("math")} className="math-display">
+            {renderMath(mathLines.join("\n").trim(), true)}
+          </div>,
+        );
         continue;
       }
 
@@ -717,7 +978,11 @@ function renderMarkdownBlocks(markdown: string) {
           quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
           i += 1;
         }
-        blocks.push(<blockquote key={nextKey("quote")}>{renderInlineMarkdown(quoteLines.join(" "))}</blockquote>);
+        blocks.push(
+          <blockquote key={nextKey("quote")}>
+            {renderInlineMarkdown(quoteLines.join(" "))}
+          </blockquote>,
+        );
         continue;
       }
 
@@ -729,8 +994,10 @@ function renderMarkdownBlocks(markdown: string) {
         }
         blocks.push(
           <ul key={nextKey("ul")}>
-            {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
-          </ul>
+            {items.map((item, idx) => (
+              <li key={idx}>{renderInlineMarkdown(item)}</li>
+            ))}
+          </ul>,
         );
         continue;
       }
@@ -743,13 +1010,19 @@ function renderMarkdownBlocks(markdown: string) {
         }
         blocks.push(
           <ol key={nextKey("ol")}>
-            {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
-          </ol>
+            {items.map((item, idx) => (
+              <li key={idx}>{renderInlineMarkdown(item)}</li>
+            ))}
+          </ol>,
         );
         continue;
       }
 
-      if (trimmed.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      if (
+        trimmed.includes("|") &&
+        i + 1 < lines.length &&
+        isTableSeparator(lines[i + 1])
+      ) {
         const header = splitTableRow(lines[i]);
         i += 2;
         const rows: string[][] = [];
@@ -761,15 +1034,25 @@ function renderMarkdownBlocks(markdown: string) {
           <div key={nextKey("table")} className="markdown-table-wrap">
             <table>
               <thead>
-                <tr>{header.map((cell, idx) => <th key={idx}>{renderInlineMarkdown(cell)}</th>)}</tr>
+                <tr>
+                  {header.map((cell, idx) => (
+                    <th key={idx}>{renderInlineMarkdown(cell)}</th>
+                  ))}
+                </tr>
               </thead>
               <tbody>
                 {rows.map((row, rowIdx) => (
-                  <tr key={rowIdx}>{header.map((_, cellIdx) => <td key={cellIdx}>{renderInlineMarkdown(row[cellIdx] || "")}</td>)}</tr>
+                  <tr key={rowIdx}>
+                    {header.map((_, cellIdx) => (
+                      <td key={cellIdx}>
+                        {renderInlineMarkdown(row[cellIdx] || "")}
+                      </td>
+                    ))}
+                  </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </div>,
         );
         continue;
       }
@@ -779,21 +1062,35 @@ function renderMarkdownBlocks(markdown: string) {
       while (i < lines.length) {
         const next = lines[i].trim();
         if (!next) break;
-        if (/^(#{1,4})\s+/.test(next) || next.startsWith(">") || /^[-*]\s+/.test(next) || /^\d+\.\s+/.test(next) || next.startsWith("$$") || next.startsWith("\\[") || (next.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1]))) break;
+        if (
+          /^(#{1,4})\s+/.test(next) ||
+          next.startsWith(">") ||
+          /^[-*]\s+/.test(next) ||
+          /^\d+\.\s+/.test(next) ||
+          next.startsWith("$$") ||
+          next.startsWith("\\[") ||
+          (next.includes("|") &&
+            i + 1 < lines.length &&
+            isTableSeparator(lines[i + 1]))
+        )
+          break;
         paraLines.push(next);
         i += 1;
       }
-      blocks.push(<p key={nextKey("p")}>{renderInlineMarkdown(paraLines.join(" "))}</p>);
+      blocks.push(
+        <p key={nextKey("p")}>{renderInlineMarkdown(paraLines.join(" "))}</p>,
+      );
     }
   };
 
   while ((fence = fencePattern.exec(markdown)) !== null) {
-    if (fence.index > lastIndex) pushTextBlocks(markdown.slice(lastIndex, fence.index));
+    if (fence.index > lastIndex)
+      pushTextBlocks(markdown.slice(lastIndex, fence.index));
     const language = fence[1] ? `language-${fence[1]}` : "";
     blocks.push(
       <pre key={`code-${blockIndex++}`} className="markdown-code-block">
         <code className={language}>{fence[2].replace(/\n$/, "")}</code>
-      </pre>
+      </pre>,
     );
     lastIndex = fence.index + fence[0].length;
   }
@@ -808,50 +1105,203 @@ function MessageContent({ role, content }: Message) {
     return <div className="bubble-text plain-message">{content}</div>;
   }
 
-  return <div className="bubble-text markdown-message">{renderMarkdownBlocks(content)}</div>;
+  return (
+    <div className="bubble-text markdown-message">
+      {renderMarkdownBlocks(content)}
+    </div>
+  );
 }
 
+function speechTextFromAssistantResponse(content: string) {
+  return content
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)]\((https?:\/\/[^)\s]+)\)/g, "$1")
+    .replace(/!\[([^\]]*)]\(([^)]+)\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/[\$\[\]{}]/g, " ")
+    .replace(/\\leq?|≤/g, " less than or equal to ")
+    .replace(/\\geq?|≥/g, " greater than or equal to ")
+    .replace(/\\succeq/g, " greater than or equal to ")
+    .replace(/\\preceq/g, " less than or equal to ")
+    .replace(/\\to|→/g, " to ")
+    .replace(/\\infty|∞/g, " infinity ")
+    .replace(/\\lVert|\\rVert|‖/g, " norm ")
+    .replace(/\\[a-zA-Z]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function SpeakGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M5 10v4h3.2L13 18.4V5.6L8.2 10H5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M16.2 8.4a5.1 5.1 0 0 1 0 7.2M18.7 6a8.6 8.6 0 0 1 0 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 
 function SidebarGlyph({ className = "" }: { className?: string }) {
   return (
-    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <rect x="3" y="4" width="18" height="16" rx="4" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M9 4v16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M6 8h.01M6 12h.01M6 16h.01" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect
+        x="3"
+        y="4"
+        width="18"
+        height="16"
+        rx="4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M9 4v16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M6 8h.01M6 12h.01M6 16h.01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
 
 function NewChatGlyph({ className = "" }: { className?: string }) {
   return (
-    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M5 19h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M7 15.5 16.7 5.8a2.1 2.1 0 0 1 3 3L10 18.5 6 19l1-3.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M5 19h14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M7 15.5 16.7 5.8a2.1 2.1 0 0 1 3 3L10 18.5 6 19l1-3.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 
 function ChatGlyph({ className = "" }: { className?: string }) {
   return (
-    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M5.5 17.5A7.3 7.3 0 1 1 9 20l-4 1 1-3.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M5.5 17.5A7.3 7.3 0 1 1 9 20l-4 1 1-3.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 
 function SettingsGlyph({ className = "" }: { className?: string }) {
   return (
-    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M19.4 13.5a7.7 7.7 0 0 0 .05-1.5l1.7-1.3-1.9-3.2-2 .8a7.1 7.1 0 0 0-1.3-.75L15.6 5h-3.7l-.35 2.55c-.46.2-.9.45-1.3.75l-2-.8-1.9 3.2L8.05 12a7.7 7.7 0 0 0 .05 1.5l-1.75 1.35 1.9 3.2 2.08-.84c.38.28.8.51 1.24.7L11.9 20h3.7l.33-2.1c.45-.19.86-.43 1.25-.7l2.07.84 1.9-3.2-1.75-1.34Z" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M19.4 13.5a7.7 7.7 0 0 0 .05-1.5l1.7-1.3-1.9-3.2-2 .8a7.1 7.1 0 0 0-1.3-.75L15.6 5h-3.7l-.35 2.55c-.46.2-.9.45-1.3.75l-2-.8-1.9 3.2L8.05 12a7.7 7.7 0 0 0 .05 1.5l-1.75 1.35 1.9 3.2 2.08-.84c.38.28.8.51 1.24.7L11.9 20h3.7l.33-2.1c.45-.19.86-.43 1.25-.7l2.07.84 1.9-3.2-1.75-1.34Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 
 function TrashGlyph({ className = "" }: { className?: string }) {
   return (
-    <svg className={className} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M5 7h14M10 11v6M14 11v6M9 7l.6-2h4.8L15 7M7 7l.7 13h8.6L17 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M5 7h14M10 11v6M14 11v6M9 7l.6-2h4.8L15 7M7 7l.7 13h8.6L17 7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -863,11 +1313,15 @@ export default function Chat() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const [messages, setMessages] = useState<Message[]>(() => [makeMsg("assistant", DEFAULT_ASSISTANT_GREETING)]);
+  const [messages, setMessages] = useState<Message[]>(() => [
+    makeMsg("assistant", DEFAULT_ASSISTANT_GREETING),
+  ]);
   const messagesRef = useRef<Message[]>(messages);
 
   const [conversations, setConversations] = useState<SavedConversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<
+    string | null
+  >(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
@@ -898,13 +1352,22 @@ export default function Chat() {
   const silenceSinceRef = useRef<number | null>(null);
   const hadSpeechRef = useRef(false);
   const recognitionRef = useRef<any>(null);
-  const transcriptRef = useRef<SpeechBuffer>({ finalSegments: {}, interimSegments: {} });
+  const transcriptRef = useRef<SpeechBuffer>({
+    finalSegments: {},
+    interimSegments: {},
+  });
   const nextFinalSegmentIdRef = useRef(0);
   const syntheticWaveformRafRef = useRef<number | null>(null);
   const browserSpeechAutoStopTimerRef = useRef<number | null>(null);
   const browserSpeechHadResultRef = useRef(false);
   const browserDoneRequestedRef = useRef(false);
   const voicePhaseRef = useRef<VoicePhase>("idle");
+
+  const [speechReady, setSpeechReady] = useState(false);
+  const [speakingMessageKey, setSpeakingMessageKey] = useState<string | null>(
+    null,
+  );
+  const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const latestUserMessageRef = useRef<HTMLDivElement | null>(null);
@@ -915,10 +1378,16 @@ export default function Chat() {
   const [composerHeight, setComposerHeight] = useState(184);
   const [keyboardInset, setKeyboardInset] = useState(0);
 
-  const hasUserMessages = useMemo(() => messages.some((m) => m.role === "user"), [messages]);
+  const hasUserMessages = useMemo(
+    () => messages.some((m) => m.role === "user"),
+    [messages],
+  );
   const sortedConversations = useMemo(
-    () => [...conversations].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
-    [conversations]
+    () =>
+      [...conversations].sort(
+        (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+      ),
+    [conversations],
   );
   const latestUserMessageIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -939,6 +1408,15 @@ export default function Chat() {
 
   useEffect(() => {
     setPortalReady(true);
+  }, []);
+
+  useEffect(() => {
+    const supported = isSpeechSynthesisSupported();
+    setSpeechReady(supported);
+
+    return () => {
+      if (supported) window.speechSynthesis.cancel();
+    };
   }, []);
 
   useEffect(() => {
@@ -986,7 +1464,7 @@ export default function Chat() {
     try {
       window.localStorage.setItem(
         CHAT_HISTORY_STORAGE_KEY,
-        JSON.stringify(sortedConversations.slice(0, MAX_SAVED_CONVERSATIONS))
+        JSON.stringify(sortedConversations.slice(0, MAX_SAVED_CONVERSATIONS)),
       );
     } catch {
       // Local storage can fail in private mode or when the quota is full.
@@ -998,11 +1476,14 @@ export default function Chat() {
   }, [activeConversationId]);
 
   useEffect(() => {
-    if (!historyLoaded || !activeConversationId || !hasUserMessage(messages)) return;
+    if (!historyLoaded || !activeConversationId || !hasUserMessage(messages))
+      return;
 
     const now = new Date().toISOString();
     setConversations((prev) => {
-      const existing = prev.find((conversation) => conversation.id === activeConversationId);
+      const existing = prev.find(
+        (conversation) => conversation.id === activeConversationId,
+      );
       const createdAt = existing?.createdAt || now;
       const updated: SavedConversation = {
         id: activeConversationId,
@@ -1012,7 +1493,12 @@ export default function Chat() {
         updatedAt: now,
       };
 
-      return [updated, ...prev.filter((conversation) => conversation.id !== activeConversationId)]
+      return [
+        updated,
+        ...prev.filter(
+          (conversation) => conversation.id !== activeConversationId,
+        ),
+      ]
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
         .slice(0, MAX_SAVED_CONVERSATIONS);
     });
@@ -1045,7 +1531,8 @@ export default function Chat() {
       if (debugOpen || confirmClearOpen) return;
 
       const menu = settingsMenuRef.current;
-      if (menu && !menu.contains(event.target as Node)) setSettingsMenuOpen(false);
+      if (menu && !menu.contains(event.target as Node))
+        setSettingsMenuOpen(false);
     };
 
     document.addEventListener("pointerdown", onPointerDown);
@@ -1057,7 +1544,11 @@ export default function Chat() {
   }, [input]);
 
   useEffect(() => {
-    if (latestUserMessageIndex < 0 || lastUserScrollIndexRef.current === latestUserMessageIndex) return;
+    if (
+      latestUserMessageIndex < 0 ||
+      lastUserScrollIndexRef.current === latestUserMessageIndex
+    )
+      return;
 
     lastUserScrollIndexRef.current = latestUserMessageIndex;
     window.requestAnimationFrame(() => {
@@ -1066,11 +1557,19 @@ export default function Chat() {
   }, [latestUserMessageIndex]);
 
   useEffect(() => {
-    if (busy || latestAssistantResponseIndex < 0 || lastAssistantFocusIndexRef.current === latestAssistantResponseIndex) return;
+    if (
+      busy ||
+      latestAssistantResponseIndex < 0 ||
+      lastAssistantFocusIndexRef.current === latestAssistantResponseIndex
+    )
+      return;
 
     lastAssistantFocusIndexRef.current = latestAssistantResponseIndex;
     window.requestAnimationFrame(() => {
-      scrollChatElementTo(latestAssistantResponseRef.current, assistantLeadInOffset());
+      scrollChatElementTo(
+        latestAssistantResponseRef.current,
+        assistantLeadInOffset(),
+      );
     });
   }, [busy, latestAssistantResponseIndex]);
 
@@ -1080,7 +1579,8 @@ export default function Chat() {
     const el = composerFixedRef.current;
     if (!el) return;
 
-    const updateHeight = () => setComposerHeight(Math.ceil(el.getBoundingClientRect().height));
+    const updateHeight = () =>
+      setComposerHeight(Math.ceil(el.getBoundingClientRect().height));
     updateHeight();
 
     const ro = new ResizeObserver(updateHeight);
@@ -1107,7 +1607,7 @@ export default function Chat() {
           active instanceof HTMLTextAreaElement ||
           active instanceof HTMLInputElement ||
           active instanceof HTMLSelectElement ||
-          active instanceof HTMLElement && active.isContentEditable;
+          (active instanceof HTMLElement && active.isContentEditable);
         const isMobileWidth = window.matchMedia("(max-width: 720px)").matches;
 
         if (!viewport || !isMobileWidth || !isEditable) {
@@ -1115,7 +1615,8 @@ export default function Chat() {
           return;
         }
 
-        const rawInset = window.innerHeight - viewport.height - viewport.offsetTop;
+        const rawInset =
+          window.innerHeight - viewport.height - viewport.offsetTop;
         const nextInset = Math.max(0, Math.round(rawInset));
         setKeyboardInset(nextInset > 72 ? nextInset : 0);
       });
@@ -1144,6 +1645,55 @@ export default function Chat() {
     return () => cleanupRecordingResources();
   }, []);
 
+  function isSpeechSynthesisSupported() {
+    return (
+      typeof window !== "undefined" &&
+      "speechSynthesis" in window &&
+      typeof window.SpeechSynthesisUtterance !== "undefined"
+    );
+  }
+
+  function stopSpeaking() {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    speechUtteranceRef.current = null;
+    setSpeakingMessageKey(null);
+  }
+
+  function speakAssistantMessage(messageKey: string, content: string) {
+    if (!isSpeechSynthesisSupported()) return;
+
+    if (speakingMessageKey === messageKey) {
+      stopSpeaking();
+      return;
+    }
+
+    const text = speechTextFromAssistantResponse(content);
+    if (!text) return;
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new window.SpeechSynthesisUtterance(text);
+    utterance.lang = "en-IN";
+    utterance.rate = 0.96;
+    utterance.pitch = 1;
+
+    utterance.onend = () => {
+      if (speechUtteranceRef.current === utterance) {
+        speechUtteranceRef.current = null;
+        setSpeakingMessageKey(null);
+      }
+    };
+
+    utterance.onerror = utterance.onend;
+
+    speechUtteranceRef.current = utterance;
+    setSpeakingMessageKey(messageKey);
+    window.speechSynthesis.speak(utterance);
+  }
+
   function scrollChatElementTo(element: HTMLElement | null, offsetPx = 0) {
     if (!element) return;
 
@@ -1155,8 +1705,12 @@ export default function Chat() {
 
     const scrollerRect = scroller.getBoundingClientRect();
     const elementRect = element.getBoundingClientRect();
-    const targetTop = scroller.scrollTop + elementRect.top - scrollerRect.top - offsetPx;
-    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const targetTop =
+      scroller.scrollTop + elementRect.top - scrollerRect.top - offsetPx;
+    const maxScrollTop = Math.max(
+      0,
+      scroller.scrollHeight - scroller.clientHeight,
+    );
 
     scroller.scrollTo({
       top: Math.min(maxScrollTop, Math.max(0, targetTop)),
@@ -1179,7 +1733,10 @@ export default function Chat() {
 
   function handlePromptFocus() {
     window.setTimeout(() => {
-      inputRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      inputRef.current?.scrollIntoView({
+        block: "nearest",
+        behavior: "smooth",
+      });
     }, 80);
   }
 
@@ -1195,7 +1752,9 @@ export default function Chat() {
     setModeMenuOpen(false);
 
     if (document.activeElement === inputRef.current) {
-      window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+      window.requestAnimationFrame(() =>
+        inputRef.current?.focus({ preventScroll: true }),
+      );
     }
   }
 
@@ -1218,9 +1777,26 @@ export default function Chat() {
     return id;
   }
 
-  async function callChat(nextMessages: Message[]) {
+  async function callChat(
+    nextMessages: Message[],
+    options: ChatCallOptions = {},
+  ) {
     setBusy(true);
     setDebug(null);
+
+    const appendAssistantMessage = (content: string) => {
+      const botMsg = makeMsg("assistant", content);
+      const botIndex = nextMessages.length;
+      setMessages((prev) => [...prev, botMsg]);
+
+      if (options.autoSpeakResponse) {
+        window.setTimeout(() => {
+          speakAssistantMessage(messageSpeechKey(botMsg, botIndex), content);
+        }, 180);
+      }
+
+      return botMsg;
+    };
 
     try {
       const res = await fetch(buildApiUrl("/api/chat"), {
@@ -1232,12 +1808,11 @@ export default function Chat() {
       if (!res.ok) throw new Error(await responseErrorMessage(res, "chat"));
 
       const data: ChatResponse = await res.json();
-      const botMsg = makeMsg("assistant", data.reply);
-      setMessages((prev) => [...prev, botMsg]);
+      appendAssistantMessage(data.reply);
       setDebug(data);
     } catch (error: unknown) {
       const errMsg = friendlyRequestError(error, "chat").slice(0, 520);
-      setMessages((prev) => [...prev, makeMsg("assistant", `⚠️ ${errMsg}`)]);
+      appendAssistantMessage(`⚠️ ${errMsg}`);
     } finally {
       setBusy(false);
     }
@@ -1247,6 +1822,7 @@ export default function Chat() {
     const text = input.trim();
     if (!text || busy || isVoiceActive) return;
 
+    stopSpeaking();
     setInput("");
     requestAnimationFrame(() => autosizePrompt());
 
@@ -1262,7 +1838,9 @@ export default function Chat() {
     setTranscriptPreview("");
 
     if (!clean) {
-      setVoiceError("I could not detect clear speech. Try again closer to the mic.");
+      setVoiceError(
+        "I could not detect clear speech. Try again closer to the mic.",
+      );
       return false;
     }
 
@@ -1286,10 +1864,13 @@ export default function Chat() {
 
     if (!clean) {
       setVoicePhase("idle");
-      setVoiceError("I could not detect clear speech. Try again closer to the mic.");
+      setVoiceError(
+        "I could not detect clear speech. Try again closer to the mic.",
+      );
       return;
     }
 
+    stopSpeaking();
     setInput(clean);
     requestAnimationFrame(() => autosizePrompt());
     await new Promise((resolve) => window.setTimeout(resolve, 90));
@@ -1299,13 +1880,14 @@ export default function Chat() {
     ensureActiveConversation();
     const next = [...messagesRef.current, makeMsg("user", clean)];
     setMessages(next);
-    await callChat(next);
+    await callChat(next, { autoSpeakResponse: true });
   }
 
   function newChat() {
     if (busy) return;
 
     cleanupRecordingResources();
+    stopSpeaking();
     activeConversationIdRef.current = null;
     setActiveConversationId(null);
     setVoicePhase("idle");
@@ -1323,6 +1905,7 @@ export default function Chat() {
     if (busy) return;
 
     cleanupRecordingResources();
+    stopSpeaking();
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
     setMessages(conversation.messages);
@@ -1337,17 +1920,24 @@ export default function Chat() {
 
     window.requestAnimationFrame(() => {
       const scroller = chatScrollRef.current;
-      if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
+      if (scroller)
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: "auto" });
     });
   }
 
-  function deleteConversation(conversationId: string, event: React.MouseEvent<HTMLButtonElement>) {
+  function deleteConversation(
+    conversationId: string,
+    event: React.MouseEvent<HTMLButtonElement>,
+  ) {
     event.stopPropagation();
     if (busy) return;
 
-    setConversations((prev) => prev.filter((conversation) => conversation.id !== conversationId));
+    setConversations((prev) =>
+      prev.filter((conversation) => conversation.id !== conversationId),
+    );
 
     if (activeConversationIdRef.current === conversationId) {
+      stopSpeaking();
       activeConversationIdRef.current = null;
       setActiveConversationId(null);
       setMessages([makeMsg("assistant", DEFAULT_ASSISTANT_GREETING)]);
@@ -1360,6 +1950,7 @@ export default function Chat() {
     if (busy) return;
 
     cleanupRecordingResources();
+    stopSpeaking();
     setConversations([]);
     activeConversationIdRef.current = null;
     setActiveConversationId(null);
@@ -1453,7 +2044,8 @@ export default function Chat() {
     stopWaveform();
 
     try {
-      if (audioCtxRef.current?.state !== "closed") audioCtxRef.current?.close?.();
+      if (audioCtxRef.current?.state !== "closed")
+        audioCtxRef.current?.close?.();
     } catch {
       // Browser may already close it.
     }
@@ -1503,7 +2095,11 @@ export default function Chat() {
 
   function getSpeechRecognitionCtor() {
     if (typeof window === "undefined") return null;
-    return (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null;
+    return (
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition ||
+      null
+    );
   }
 
   function collapseRepeatedTrailingChunks(words: string[]) {
@@ -1518,8 +2114,14 @@ export default function Chat() {
         const maxChunk = Math.floor(out.length / 2);
 
         for (let size = maxChunk; size >= 1; size -= 1) {
-          const a = out.slice(out.length - size * 2, out.length - size).join(" ").toLowerCase();
-          const b = out.slice(out.length - size).join(" ").toLowerCase();
+          const a = out
+            .slice(out.length - size * 2, out.length - size)
+            .join(" ")
+            .toLowerCase();
+          const b = out
+            .slice(out.length - size)
+            .join(" ")
+            .toLowerCase();
 
           if (a && a === b) {
             out.splice(out.length - size, size);
@@ -1547,12 +2149,16 @@ export default function Chat() {
   }
 
   function buildFinalTranscriptText() {
-    return normalizeSpeechText(orderedSegmentText(transcriptRef.current.finalSegments));
+    return normalizeSpeechText(
+      orderedSegmentText(transcriptRef.current.finalSegments),
+    );
   }
 
   function buildTranscriptText() {
     const { finalSegments, interimSegments } = transcriptRef.current;
-    return normalizeSpeechText(`${orderedSegmentText(finalSegments)} ${orderedSegmentText(interimSegments)}`);
+    return normalizeSpeechText(
+      `${orderedSegmentText(finalSegments)} ${orderedSegmentText(interimSegments)}`,
+    );
   }
 
   function scheduleBrowserSpeechAutoStop(rec: any) {
@@ -1594,7 +2200,8 @@ export default function Chat() {
         hasUsableResult = true;
 
         if (result.isFinal) {
-          transcriptRef.current.finalSegments[nextFinalSegmentIdRef.current] = text;
+          transcriptRef.current.finalSegments[nextFinalSegmentIdRef.current] =
+            text;
           nextFinalSegmentIdRef.current += 1;
           delete transcriptRef.current.interimSegments[i];
         }
@@ -1610,7 +2217,9 @@ export default function Chat() {
     rec.onerror = (event: any) => {
       const code = String(event?.error || "").trim();
       if (code && code !== "no-speech" && code !== "aborted") {
-        setVoiceError(`Browser speech recognition failed${code ? `: ${code}` : ""}. Try typing, or set NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE=backend.`);
+        setVoiceError(
+          `Browser speech recognition failed${code ? `: ${code}` : ""}. Try typing, or set NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE=backend.`,
+        );
       }
     };
 
@@ -1620,7 +2229,10 @@ export default function Chat() {
 
       if (!submitOnEnd) return;
 
-      if (!browserDoneRequestedRef.current && voicePhaseRef.current === "recording") {
+      if (
+        !browserDoneRequestedRef.current &&
+        voicePhaseRef.current === "recording"
+      ) {
         restartBrowserRecognition();
         return;
       }
@@ -1632,7 +2244,7 @@ export default function Chat() {
         setVoiceError(
           browserSpeechHadResultRef.current
             ? "The browser heard something but did not produce usable text. Try again closer to the mic."
-            : "I could not detect clear speech. Try again closer to the mic."
+            : "I could not detect clear speech. Try again closer to the mic.",
         );
         resetVoiceRefs();
         return;
@@ -1685,7 +2297,7 @@ export default function Chat() {
           const wave = 0.5 + 0.5 * Math.sin(now + i * 0.62);
           const pulse = 0.5 + 0.5 * Math.sin(now * 0.63 + i * 0.28);
           return Math.max(0.12, Math.min(1, 0.18 + wave * 0.48 + pulse * 0.18));
-        })
+        }),
       );
       syntheticWaveformRafRef.current = requestAnimationFrame(tick);
     };
@@ -1706,7 +2318,8 @@ export default function Chat() {
     });
     streamRef.current = rawStream;
 
-    const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const AudioContextCtor =
+      (window as any).AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextCtor) return;
 
     const audioCtx: AudioContext = new AudioContextCtor();
@@ -1724,7 +2337,9 @@ export default function Chat() {
   async function startBrowserSpeechInput() {
     const SpeechRecognitionCtor = getSpeechRecognitionCtor();
     if (!SpeechRecognitionCtor) {
-      setVoiceError("This browser does not support speech recognition. Use Chrome/Edge, type the question, or switch NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE=backend.");
+      setVoiceError(
+        "This browser does not support speech recognition. Use Chrome/Edge, type the question, or switch NEXT_PUBLIC_VOICE_TRANSCRIPTION_MODE=backend.",
+      );
       setVoicePhase("idle");
       return;
     }
@@ -1733,12 +2348,26 @@ export default function Chat() {
     setVoicePhase("requesting");
 
     try {
-      if (REQUIRE_LOCAL_BROWSER_STT && typeof SpeechRecognitionCtor.available === "function") {
-        const status = await SpeechRecognitionCtor.available({ langs: [BROWSER_STT_LANG], processLocally: true });
-        if (status === "downloadable" && typeof SpeechRecognitionCtor.install === "function") {
-          await SpeechRecognitionCtor.install({ langs: [BROWSER_STT_LANG], processLocally: true });
+      if (
+        REQUIRE_LOCAL_BROWSER_STT &&
+        typeof SpeechRecognitionCtor.available === "function"
+      ) {
+        const status = await SpeechRecognitionCtor.available({
+          langs: [BROWSER_STT_LANG],
+          processLocally: true,
+        });
+        if (
+          status === "downloadable" &&
+          typeof SpeechRecognitionCtor.install === "function"
+        ) {
+          await SpeechRecognitionCtor.install({
+            langs: [BROWSER_STT_LANG],
+            processLocally: true,
+          });
         } else if (status === "unavailable") {
-          throw new Error(`On-device speech recognition is unavailable for ${BROWSER_STT_LANG} in this browser.`);
+          throw new Error(
+            `On-device speech recognition is unavailable for ${BROWSER_STT_LANG} in this browser.`,
+          );
         }
       }
 
@@ -1757,7 +2386,11 @@ export default function Chat() {
       cleanupVoiceInputMedia();
       recognitionRef.current = null;
       setVoicePhase("idle");
-      setVoiceError(error instanceof Error ? error.message : "Could not start browser speech recognition.");
+      setVoiceError(
+        error instanceof Error
+          ? error.message
+          : "Could not start browser speech recognition.",
+      );
     }
   }
 
@@ -1784,7 +2417,10 @@ export default function Chat() {
     }
   }
 
-  function startWaveform(analyser: AnalyserNode, options: { autoStopOnSilence?: boolean } = {}) {
+  function startWaveform(
+    analyser: AnalyserNode,
+    options: { autoStopOnSilence?: boolean } = {},
+  ) {
     const data = new Uint8Array(analyser.fftSize);
     let noiseFloor = 0.01;
 
@@ -1836,6 +2472,7 @@ export default function Chat() {
 
     if (voicePhase === "stopping" || voicePhase === "transcribing") return;
 
+    stopSpeaking();
     setVoiceError("");
     setTranscriptPreview("");
     resetVoiceRefs();
@@ -1846,12 +2483,16 @@ export default function Chat() {
     }
 
     if (!navigator.mediaDevices?.getUserMedia) {
-      setVoiceError("Your browser does not expose microphone capture. Use Chrome/Edge or type the question.");
+      setVoiceError(
+        "Your browser does not expose microphone capture. Use Chrome/Edge or type the question.",
+      );
       return;
     }
 
     if (!(window as any).MediaRecorder) {
-      setVoiceError("This browser cannot record audio from the mic. Use Chrome/Edge for voice input.");
+      setVoiceError(
+        "This browser cannot record audio from the mic. Use Chrome/Edge for voice input.",
+      );
       return;
     }
 
@@ -1868,8 +2509,11 @@ export default function Chat() {
       });
       streamRef.current = rawStream;
 
-      const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
-      const audioCtx: AudioContext | null = AudioContextCtor ? new AudioContextCtor() : null;
+      const AudioContextCtor =
+        (window as any).AudioContext || (window as any).webkitAudioContext;
+      const audioCtx: AudioContext | null = AudioContextCtor
+        ? new AudioContextCtor()
+        : null;
       audioCtxRef.current = audioCtx;
 
       let recordStream = rawStream;
@@ -1899,10 +2543,19 @@ export default function Chat() {
         startWaveform(analyser, { autoStopOnSilence: true });
       }
 
-      const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
-      const mimeType = mimeCandidates.find((type) => MediaRecorder.isTypeSupported(type));
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ];
+      const mimeType = mimeCandidates.find((type) =>
+        MediaRecorder.isTypeSupported(type),
+      );
       const recorder = mimeType
-        ? new MediaRecorder(recordStream, { mimeType, audioBitsPerSecond: 128000 })
+        ? new MediaRecorder(recordStream, {
+            mimeType,
+            audioBitsPerSecond: 128000,
+          })
         : new MediaRecorder(recordStream, { audioBitsPerSecond: 128000 });
 
       mediaRecorderRef.current = recorder;
@@ -1919,7 +2572,9 @@ export default function Chat() {
       };
 
       recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const blob = new Blob(chunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
         cleanupRecordingResources();
 
         setVoicePhase("transcribing");
@@ -1933,15 +2588,23 @@ export default function Chat() {
         try {
           const form = new FormData();
           form.append("file", blob, "voice.webm");
-          const response = await fetch(buildApiUrl("/api/transcribe"), { method: "POST", body: form });
-          if (!response.ok) throw new Error(await responseErrorMessage(response, "transcription"));
+          const response = await fetch(buildApiUrl("/api/transcribe"), {
+            method: "POST",
+            body: form,
+          });
+          if (!response.ok)
+            throw new Error(
+              await responseErrorMessage(response, "transcription"),
+            );
 
           const data = (await response.json()) as { text?: string };
           const text = String(data.text || "").trim();
 
           if (!text) {
             setVoicePhase("idle");
-            setVoiceError("I could not detect clear speech. Try again closer to the mic.");
+            setVoiceError(
+              "I could not detect clear speech. Try again closer to the mic.",
+            );
             return;
           }
 
@@ -1955,12 +2618,21 @@ export default function Chat() {
       recorder.start(250);
       setVoicePhase("recording");
 
-      maxRecTimerRef.current = window.setTimeout(() => stopRecording(), MAX_RECORDING_MS);
+      maxRecTimerRef.current = window.setTimeout(
+        () => stopRecording(),
+        MAX_RECORDING_MS,
+      );
     } catch (error: any) {
       cleanupRecordingResources();
       setVoicePhase("idle");
-      const denied = String(error?.name || "").toLowerCase().includes("notallowed");
-      setVoiceError(denied ? "Microphone permission was denied." : "Could not start the microphone.");
+      const denied = String(error?.name || "")
+        .toLowerCase()
+        .includes("notallowed");
+      setVoiceError(
+        denied
+          ? "Microphone permission was denied."
+          : "Could not start the microphone.",
+      );
     }
   }
 
@@ -2035,7 +2707,10 @@ export default function Chat() {
           : voiceError || transcriptPreview;
 
     return (
-      <div className={`voice-panel ${voiceError ? "has-error" : ""}`} aria-live="polite">
+      <div
+        className={`voice-panel ${voiceError ? "has-error" : ""}`}
+        aria-live="polite"
+      >
         <div className="voice-panel-top">
           <div>
             <div className="voice-title">{title}</div>
@@ -2045,7 +2720,11 @@ export default function Chat() {
             <button
               className="voice-stop-btn"
               type="button"
-              onClick={VOICE_TRANSCRIPTION_MODE === "browser" ? stopBrowserSpeechInput : stopRecording}
+              onClick={
+                VOICE_TRANSCRIPTION_MODE === "browser"
+                  ? stopBrowserSpeechInput
+                  : stopRecording
+              }
             >
               Done
             </button>
@@ -2090,7 +2769,9 @@ export default function Chat() {
   }
 
   function renderHistorySidebar() {
-    const toggleLabel = historyOpen ? "Close chat history" : "Open chat history";
+    const toggleLabel = historyOpen
+      ? "Close chat history"
+      : "Open chat history";
 
     const openSettingsFromRail = () => {
       setHistoryOpen(true);
@@ -2099,7 +2780,9 @@ export default function Chat() {
 
     return (
       <>
-        {portalReady ? createPortal(renderMobileHistoryButton(), document.body) : null}
+        {portalReady
+          ? createPortal(renderMobileHistoryButton(), document.body)
+          : null}
 
         <div
           className={`history-backdrop ${historyOpen ? "is-open" : ""}`}
@@ -2107,7 +2790,10 @@ export default function Chat() {
           aria-hidden="true"
         />
 
-        <aside className={`history-sidebar ${historyOpen ? "is-open" : ""}`} aria-label="Chat history">
+        <aside
+          className={`history-sidebar ${historyOpen ? "is-open" : ""}`}
+          aria-label="Chat history"
+        >
           <div className="history-rail" aria-label="Sidebar shortcuts">
             <div className="history-rail-top">
               <button
@@ -2154,7 +2840,9 @@ export default function Chat() {
           <div className="history-panel">
             <div className="history-sidebar-header">
               <div className="history-heading">
-                <span className="history-heading-icon" aria-hidden="true"><SidebarGlyph /></span>
+                <span className="history-heading-icon" aria-hidden="true">
+                  <SidebarGlyph />
+                </span>
                 <div>
                   <div className="history-title">Chat history</div>
                   <div className="history-subtitle">Saved on this device</div>
@@ -2171,13 +2859,20 @@ export default function Chat() {
               </button>
             </div>
 
-            <button className="history-new-chat-btn" type="button" onClick={newChat} disabled={busy}>
+            <button
+              className="history-new-chat-btn"
+              type="button"
+              onClick={newChat}
+              disabled={busy}
+            >
               <NewChatGlyph />
               <span>New chat</span>
             </button>
 
             <div className="history-list-shell">
-              <div className="history-section-label">Previous conversations</div>
+              <div className="history-section-label">
+                Previous conversations
+              </div>
 
               <div className="history-list" role="list">
                 {sortedConversations.length ? (
@@ -2197,15 +2892,23 @@ export default function Chat() {
                           onClick={() => openConversation(conversation)}
                           disabled={busy}
                         >
-                          <span className="history-item-title">{conversation.title}</span>
-                          <span className="history-item-preview">{conversationPreview(conversation.messages)}</span>
+                          <span className="history-item-title">
+                            {conversation.title}
+                          </span>
+                          <span className="history-item-preview">
+                            {conversationPreview(conversation.messages)}
+                          </span>
                         </button>
                         <span className="history-item-meta">
-                          <span>{formatConversationTime(conversation.createdAt)}</span>
+                          <span>
+                            {formatConversationTime(conversation.createdAt)}
+                          </span>
                           <button
                             className="history-delete-btn"
                             type="button"
-                            onClick={(event) => deleteConversation(conversation.id, event)}
+                            onClick={(event) =>
+                              deleteConversation(conversation.id, event)
+                            }
                             aria-label={`Delete ${conversation.title}`}
                             title="Delete conversation"
                             disabled={busy}
@@ -2218,13 +2921,18 @@ export default function Chat() {
                   })
                 ) : (
                   <div className="history-empty">
-                    Conversations will appear here after you send your first message.
+                    Conversations will appear here after you send your first
+                    message.
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="history-settings" aria-label="Sidebar settings" ref={settingsMenuRef}>
+            <div
+              className="history-settings"
+              aria-label="Sidebar settings"
+              ref={settingsMenuRef}
+            >
               <button
                 className={`history-settings-trigger ${settingsMenuOpen ? "is-open" : ""}`}
                 type="button"
@@ -2233,21 +2941,33 @@ export default function Chat() {
                 aria-expanded={settingsMenuOpen}
               >
                 <span className="history-settings-trigger-main">
-                  <span className="history-settings-icon" aria-hidden="true"><SettingsGlyph /></span>
+                  <span className="history-settings-icon" aria-hidden="true">
+                    <SettingsGlyph />
+                  </span>
                   <span>
                     <span className="history-settings-title">Settings</span>
-                    <span className="history-settings-subtitle">Theme, model details, local data</span>
+                    <span className="history-settings-subtitle">
+                      Theme, model details, local data
+                    </span>
                   </span>
                 </span>
-                <span className="history-settings-chevron" aria-hidden="true">▾</span>
+                <span className="history-settings-chevron" aria-hidden="true">
+                  ▾
+                </span>
               </button>
 
               {settingsMenuOpen ? (
-                <div className="settings-dropdown" role="menu" aria-label="Settings options">
+                <div
+                  className="settings-dropdown"
+                  role="menu"
+                  aria-label="Settings options"
+                >
                   <div className="settings-dropdown-row" role="menuitem">
                     <div>
                       <div className="settings-option-title">Theme</div>
-                      <div className="settings-option-subtitle">Toggle light or dark</div>
+                      <div className="settings-option-subtitle">
+                        Toggle light or dark
+                      </div>
                     </div>
                     <ThemeToggle />
                   </div>
@@ -2279,7 +2999,11 @@ export default function Chat() {
         </aside>
 
         {debugOpen ? (
-          <div className="app-modal-backdrop" role="presentation" onClick={() => setDebugOpen(false)}>
+          <div
+            className="app-modal-backdrop"
+            role="presentation"
+            onClick={() => setDebugOpen(false)}
+          >
             <section
               className="app-modal model-details-modal"
               role="dialog"
@@ -2290,9 +3014,16 @@ export default function Chat() {
               <div className="app-modal-header">
                 <div>
                   <div className="app-modal-title">Model details</div>
-                  <div className="app-modal-subtitle">Runtime information from the latest response</div>
+                  <div className="app-modal-subtitle">
+                    Runtime information from the latest response
+                  </div>
                 </div>
-                <button className="app-modal-close" type="button" onClick={() => setDebugOpen(false)} aria-label="Close model details">
+                <button
+                  className="app-modal-close"
+                  type="button"
+                  onClick={() => setDebugOpen(false)}
+                  aria-label="Close model details"
+                >
                   ×
                 </button>
               </div>
@@ -2302,7 +3033,11 @@ export default function Chat() {
         ) : null}
 
         {confirmClearOpen ? (
-          <div className="app-modal-backdrop" role="presentation" onClick={() => setConfirmClearOpen(false)}>
+          <div
+            className="app-modal-backdrop"
+            role="presentation"
+            onClick={() => setConfirmClearOpen(false)}
+          >
             <section
               className="app-modal confirm-clear-modal"
               role="dialog"
@@ -2313,20 +3048,36 @@ export default function Chat() {
               <div className="app-modal-header">
                 <div>
                   <div className="app-modal-title">Delete all memory?</div>
-                  <div className="app-modal-subtitle">This removes only the chats saved on this device.</div>
+                  <div className="app-modal-subtitle">
+                    This removes only the chats saved on this device.
+                  </div>
                 </div>
-                <button className="app-modal-close" type="button" onClick={() => setConfirmClearOpen(false)} aria-label="Cancel deletion">
+                <button
+                  className="app-modal-close"
+                  type="button"
+                  onClick={() => setConfirmClearOpen(false)}
+                  aria-label="Cancel deletion"
+                >
                   ×
                 </button>
               </div>
               <p className="confirm-clear-copy">
-                This cannot be undone. Your current conversation and all saved local conversations will be cleared.
+                This cannot be undone. Your current conversation and all saved
+                local conversations will be cleared.
               </p>
               <div className="confirm-clear-actions">
-                <button className="confirm-clear-cancel" type="button" onClick={() => setConfirmClearOpen(false)}>
+                <button
+                  className="confirm-clear-cancel"
+                  type="button"
+                  onClick={() => setConfirmClearOpen(false)}
+                >
                   Cancel
                 </button>
-                <button className="confirm-clear-delete" type="button" onClick={clearAllLocalHistory}>
+                <button
+                  className="confirm-clear-delete"
+                  type="button"
+                  onClick={clearAllLocalHistory}
+                >
                   Delete all
                 </button>
               </div>
@@ -2364,25 +3115,38 @@ export default function Chat() {
           <span>Candidate models</span>
           <strong>{debug?.candidate_models?.join(", ") || "-"}</strong>
         </div>
-        {debug?.model_errors?.length ? <pre className="debug-pre">{debug.model_errors.join("\n")}</pre> : null}
+        {debug?.model_errors?.length ? (
+          <pre className="debug-pre">{debug.model_errors.join("\n")}</pre>
+        ) : null}
       </div>
     );
   }
 
   function renderComposer(extraClassName: string) {
-    const micLabel = voicePhase === "recording" ? "Done recording" : "Start voice input";
+    const micLabel =
+      voicePhase === "recording" ? "Done recording" : "Start voice input";
 
-    const composerRef = extraClassName.includes("composer-fixed") ? composerFixedRef : undefined;
+    const composerRef = extraClassName.includes("composer-fixed")
+      ? composerFixedRef
+      : undefined;
 
     return (
-      <div className={`composer ${extraClassName}`} aria-label="Message composer" ref={composerRef}>
-        <div className={`composer-bar ${busy ? "is-busy" : ""} ${isVoiceActive ? "has-voice" : ""}`}>
+      <div
+        className={`composer ${extraClassName}`}
+        aria-label="Message composer"
+        ref={composerRef}
+      >
+        <div
+          className={`composer-bar ${busy ? "is-busy" : ""} ${isVoiceActive ? "has-voice" : ""}`}
+        >
           {renderVoiceStatus()}
 
           <textarea
             id="prompt-input"
             className="prompt-input"
-            placeholder={voicePhase === "recording" ? "Recording…" : "Ask anything…"}
+            placeholder={
+              voicePhase === "recording" ? "Recording…" : "Ask anything…"
+            }
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onPromptKeyDown}
@@ -2402,9 +3166,21 @@ export default function Chat() {
                 onClick={toggleRecording}
                 aria-label={micLabel}
                 title={micLabel}
-                disabled={busy || voicePhase === "stopping" || voicePhase === "transcribing"}
+                disabled={
+                  busy ||
+                  voicePhase === "stopping" ||
+                  voicePhase === "transcribing"
+                }
               >
-                {voicePhase === "recording" ? <span className="stop-glyph" /> : <span className="voice-wave-glyph" aria-hidden="true"><span /><span /><span /></span>}
+                {voicePhase === "recording" ? (
+                  <span className="stop-glyph" />
+                ) : (
+                  <span className="voice-wave-glyph" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                )}
               </button>
 
               <button
@@ -2429,92 +3205,171 @@ export default function Chat() {
       className={`chat-root ${hasUserMessages ? "chat-mode" : "hero-mode"} ${historyOpen ? "history-open" : ""}`}
       data-mode={appMode}
       data-voice-phase={voicePhase}
-      style={{ "--composer-height": `${composerHeight}px`, "--keyboard-inset": `${keyboardInset}px` } as React.CSSProperties}
+      style={
+        {
+          "--composer-height": `${composerHeight}px`,
+          "--keyboard-inset": `${keyboardInset}px`,
+        } as React.CSSProperties
+      }
     >
       {renderHistorySidebar()}
 
       <div className="chat-main">
-      {hasUserMessages ? (
-        <>
-          <div className="chat-actions">
-            <button
-              onClick={() => setHistoryOpen((value) => !value)}
-              className="ghost-btn history-chat-toggle sidebar-icon-button"
-              type="button"
-              aria-expanded={historyOpen}
-              aria-label="Open chat history"
-              title="Chat history"
-            >
-              <SidebarGlyph />
-            </button>
-          </div>
+        {hasUserMessages ? (
+          <>
+            <div className="chat-actions">
+              <button
+                onClick={() => setHistoryOpen((value) => !value)}
+                className="ghost-btn history-chat-toggle sidebar-icon-button"
+                type="button"
+                aria-expanded={historyOpen}
+                aria-label="Open chat history"
+                title="Chat history"
+              >
+                <SidebarGlyph />
+              </button>
+            </div>
 
-          <div className="chat-scroll-outer" ref={chatScrollRef}>
-            <div className="chat-scroll-inner">
-              <div className="chat">
-                {messages.map((m, idx) => {
-                  const isPending = busy && idx === messages.length - 1 && m.role === "user";
-                  return (
+            <div className="chat-scroll-outer" ref={chatScrollRef}>
+              <div className="chat-scroll-inner">
+                <div className="chat">
+                  {messages.map((m, idx) => {
+                    const isPending =
+                      busy && idx === messages.length - 1 && m.role === "user";
+                    const messageKey = messageSpeechKey(m, idx);
+                    const isAssistantMessage = m.role === "assistant";
+                    const isSpeaking = speakingMessageKey === messageKey;
+
+                    return (
+                      <div
+                        key={`${m.ts}-${idx}`}
+                        ref={
+                          idx === latestUserMessageIndex
+                            ? latestUserMessageRef
+                            : idx === latestAssistantResponseIndex
+                              ? latestAssistantResponseRef
+                              : undefined
+                        }
+                        className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""} ${isAssistantMessage ? "has-speech-action" : ""}`}
+                        style={{ "--bubble-index": idx } as React.CSSProperties}
+                      >
+                        {isAssistantMessage ? (
+                          <button
+                            className={`speak-response-btn ${isSpeaking ? "is-speaking" : ""}`}
+                            type="button"
+                            onClick={() =>
+                              speakAssistantMessage(messageKey, m.content)
+                            }
+                            aria-label={
+                              isSpeaking
+                                ? "Stop reading response"
+                                : "Read response aloud"
+                            }
+                            title={isSpeaking ? "Stop reading" : "Read aloud"}
+                            disabled={!speechReady}
+                          >
+                            <SpeakGlyph />
+                          </button>
+                        ) : null}
+                        <MessageContent
+                          role={m.role}
+                          content={m.content}
+                          ts={m.ts}
+                        />
+                        <div className="meta">{m.ts}</div>
+                      </div>
+                    );
+                  })}
+
+                  {busy ? (
                     <div
-                      key={`${m.ts}-${idx}`}
-                      ref={
-                        idx === latestUserMessageIndex
-                          ? latestUserMessageRef
-                          : idx === latestAssistantResponseIndex
-                            ? latestAssistantResponseRef
-                            : undefined
-                      }
-                      className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}
-                      style={{ "--bubble-index": idx } as React.CSSProperties}
+                      className="bubble ai typing"
+                      aria-label="Assistant is analyzing"
                     >
-                      <MessageContent role={m.role} content={m.content} ts={m.ts} />
-                      <div className="meta">{m.ts}</div>
+                      <div className="typing-row">
+                        <span className="typing-label">Analyzing</span>
+                        <span className="typing-dots" aria-hidden="true">
+                          <span className="dot" />
+                          <span className="dot" />
+                          <span className="dot" />
+                        </span>
+                      </div>
                     </div>
-                  );
-                })}
+                  ) : null}
 
-                {busy ? (
-                  <div className="bubble ai typing" aria-label="Assistant is analyzing">
-                    <div className="typing-row">
-                      <span className="typing-label">Analyzing</span>
-                      <span className="typing-dots" aria-hidden="true">
-                        <span className="dot" />
-                        <span className="dot" />
-                        <span className="dot" />
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="chat-bottom-spacer" aria-hidden="true" />
+                  <div className="chat-bottom-spacer" aria-hidden="true" />
+                </div>
               </div>
             </div>
-          </div>
 
-          {renderComposer("composer-fixed")}
-        </>
-      ) : (
-        <>
-          <div className="hero">
-            <div className="hero-copy">
-              <div className="hero-kicker"><span className="sparkle" aria-hidden="true">✨</span> Hi</div>
-              <h1 className="hero-title"><span>Meet my AI twin</span></h1>
-              <p className="hero-subtitle">
-                Ask interview-style questions about projects, deep RL, strengths, growth areas — it replies like I would.
-              </p>
+            {renderComposer("composer-fixed")}
+          </>
+        ) : (
+          <>
+            <div className="hero">
+              <div className="hero-copy">
+                <div className="hero-kicker">
+                  <span className="sparkle" aria-hidden="true">
+                    ✨
+                  </span>{" "}
+                  Hi
+                </div>
+                <h1 className="hero-title">
+                  <span>Meet my AI twin</span>
+                </h1>
+                <p className="hero-subtitle">
+                  Ask interview-style questions about projects, deep RL,
+                  strengths, growth areas — it replies like I would.
+                </p>
+              </div>
+
+              {renderComposer("composer-hero")}
+
+              <div className="hero-chips" aria-label="Quick prompts">
+                <button
+                  className="chip"
+                  type="button"
+                  onClick={() =>
+                    fillPrompt(
+                      "What should we know about your life story in a few sentences?",
+                    )
+                  }
+                >
+                  What should we know about your life story in a few sentences?
+                </button>
+                <button
+                  className="chip"
+                  type="button"
+                  onClick={() => fillPrompt("What’s your #1 superpower?")}
+                >
+                  What’s your #1 superpower?
+                </button>
+                <button
+                  className="chip"
+                  type="button"
+                  onClick={() =>
+                    fillPrompt(
+                      "What are the top 3 areas you’d like to grow in?",
+                    )
+                  }
+                >
+                  What are the top 3 areas you’d like to grow in?
+                </button>
+                <button
+                  className="chip"
+                  type="button"
+                  onClick={() =>
+                    fillPrompt(
+                      "Give complete mathematical detail of your M.Tech Thesis",
+                    )
+                  }
+                >
+                  Give complete mathematical detail of your M.Tech Thesis
+                </button>
+              </div>
             </div>
-
-            {renderComposer("composer-hero")}
-
-            <div className="hero-chips" aria-label="Quick prompts">
-              <button className="chip" type="button" onClick={() => fillPrompt("What should we know about your life story in a few sentences?")}>What should we know about your life story in a few sentences?</button>
-              <button className="chip" type="button" onClick={() => fillPrompt("What’s your #1 superpower?")}>What’s your #1 superpower?</button>
-              <button className="chip" type="button" onClick={() => fillPrompt("What are the top 3 areas you’d like to grow in?")}>What are the top 3 areas you’d like to grow in?</button>
-              <button className="chip" type="button" onClick={() => fillPrompt("Give complete mathematical detail of your M.Tech Thesis")}>Give complete mathematical detail of your M.Tech Thesis</button>
-            </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
       </div>
     </div>
   );

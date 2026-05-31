@@ -19,10 +19,13 @@
       "mtech",
       "cgpa",
       "iit ism dhanbad",
-      "uem kolkata"
+      "uem kolkata",
+      "mtech guide",
+      "supervisor",
+      "dr samrat mukhopadhyay"
     ],
     "priority": 95,
-    "text": "I am completing my M.Tech in Communication and Signal Processing / Electronics Engineering from IIT (ISM) Dhanbad, 2024-2026, with CGPA 8.27/10. Before that, I completed B.Tech in Computer Science and Technology from UEM Kolkata, 2020-2024, with CGPA 8.3/10."
+    "text": "I am completing my M.Tech in Communication and Signal Processing / Electronics Engineering from IIT (ISM) Dhanbad, 2024-2026, with CGPA 8.27/10. My M.Tech supervisor / guide is Dr. Samrat Mukhopadhyay. Before that, I completed B.Tech in Computer Science and Technology from UEM Kolkata, 2020-2024, with CGPA 8.3/10."
   },
   {
     "id": "nokia_internship",
@@ -36,10 +39,36 @@
       "beam selection",
       "dueling double dqn",
       "per",
-      "action masking"
+      "action masking",
+      "continual learning",
+      "generalizability",
+      "fine tuning",
+      "ue distribution",
+      "sampo"
     ],
     "priority": 95,
-    "text": "I worked as an Applied Machine Learning Intern at Nokia Standards from Aug 2025 to Feb 2026. My work was a hypothesis-driven experiment in a discrete-action RRM setting: I investigated beam-selection strategies and trained a continual-learning Deep RL agent to test whether sub-optimal beam choices can produce higher network throughput under realistic interference constraints. I achieved around 15-35% throughput improvement over the baseline by replacing vanilla DQN with Dueling Double DQN using a residual Q-network, improving sample efficiency with Prioritized Experience Replay, and enforcing feasible decisions through constraint-aware action masking. I also studied policy transfer through selective actor/critic fine-tuning, where pretrained policies needed much less exploration to reach target performance."
+    "text": "I worked as an Applied Machine Learning Intern at Nokia Standards from Aug 2025 to Feb 2026. My work was a hypothesis-driven experiment in a discrete-action RRM setting: I investigated beam-selection strategies and trained a continual-learning Deep RL agent to test whether sub-optimal beam choices can produce higher network throughput under realistic interference constraints. I achieved around 15-35% throughput improvement over the baseline by replacing vanilla DQN with Dueling Double DQN using a residual Q-network, improving sample efficiency with Prioritized Experience Replay, and enforcing feasible decisions through constraint-aware action masking. I also studied policy transfer through selective actor/critic fine-tuning, where pretrained policies needed much less exploration to reach target performance. The internship evaluation emphasized that I ran extensive simulations for model generalizability, produced solid numerical evidence, and contributed practical techniques such as PER and expert-guided projected action-space filtering."
+  },
+  {
+    "id": "nokia_internship_outcome",
+    "title": "Nokia internship evaluation and outcome",
+    "tags": [
+      "nokia",
+      "internship outcome",
+      "evaluation",
+      "generalizability",
+      "continual learning",
+      "beam management",
+      "ue velocity",
+      "ue distribution",
+      "base station formation",
+      "site based fine tuning",
+      "prioritized experience replay",
+      "projected action space",
+      "sampo"
+    ],
+    "priority": 94,
+    "text": "The Nokia internship outcome was positive and evidence-focused. The expected outcome was to run simulations across different scenarios to evaluate RL model generalizability and the benefits of continual learning in beam management. Feedback noted that I tried an intensive and extensive set of simulations, investigated three broad scenario changes, produced solid numerical results, and reached conclusive findings. The main finding was that fine-tuning helped most when the UE distribution changed. For high UE velocity, the heuristic, Top-K, and fine-tuned DRL performed very similarly, so the gain potential of DRL was low because high mobility made UE grouping harder and throughput performance was statistically similar. For changing UE distribution, fine-tuned DRL performed better than Top-K or heuristic methods in the default and cell-edge scenarios and reached strong performance faster than training from scratch, so site-based fine-tuning was necessary there. In the cell-centre scenario, gain potential was lower and site-based fine-tuning was not necessary because fine-tuned DRL and training from scratch had similar throughput and resource utilization. In the hybrid hotspot scenario, site-based fine-tuning helped, though KPI differences among DRL agents were minimal enough that an inference-only model could also be considered. For changing base-station formation, gain over heuristics was low and site-based fine-tuning was not effective, including in high-mobility cases where all algorithms delivered very similar throughput. The best outcome was improvement of AI/ML models and formation of key conclusions based on high-quality results. My specific contributions included Prioritized Experience Replay, intelligent filtering of action-selection criteria using expert RL knowledge through a projected action space, and code planned for contribution to SAMPO main repository. The feedback summarized that these contributions improved code completeness and results."
   },
   {
     "id": "thesis_overview",
@@ -51,10 +80,13 @@
       "online convex optimization",
       "oco",
       "sparse online portfolio learning",
-      "windowed ftrl"
+      "windowed ftrl",
+      "mtech guide",
+      "supervisor",
+      "dr samrat mukhopadhyay"
     ],
     "priority": 95,
-    "text": "My M.Tech thesis is Sparse Online Portfolio Learning, supervised by Dr. Samrat Mukhopadhyay at IIT (ISM) Dhanbad. The work frames portfolio allocation as an online decision problem: at each rebalance time, the algorithm must choose a portfolio before future returns are known, using only a recent window of past market data. The presentation title was Sparse Switching Portfolio Allocation: A Windowed FTRL-Style Framework with Risk and Temporal Stability."
+    "text": "My M.Tech thesis is Sparse Online Portfolio Learning, supervised by my M.Tech guide Dr. Samrat Mukhopadhyay at IIT (ISM) Dhanbad. The work frames portfolio allocation as an online decision problem: at each rebalance time, the algorithm must choose a portfolio before future returns are known, using only a recent window of past market data. The presentation title was Sparse Switching Portfolio Allocation: A Windowed FTRL-Style Framework with Risk and Temporal Stability."
   },
   {
     "id": "thesis_problem_constraints",
@@ -209,5 +241,138 @@
     ],
     "priority": 100,
     "text": "Answer like a strong interview candidate: start with a crisp thesis, then give two or three concrete details with methods, metrics, or decisions, then close cleanly. Prefer evidence from Nokia, thesis work, Hermis, and leadership experience. Do not overclaim backtest results as live trading proof. If a question asks for something unsupported by the facts, say that clearly and then give the closest honest answer."
+  },
+  {
+    "id": "assessment_project_100x_ai_twin",
+    "title": "100x assessment project: AI twin voice/chat bot",
+    "tags": [
+      "100x",
+      "assessment",
+      "stage 1",
+      "ai engineer",
+      "generative ai developer",
+      "voice bot",
+      "voicebot",
+      "ai twin",
+      "chatbot",
+      "rag",
+      "retrieval augmented generation",
+      "knowledge base",
+      "next.js",
+      "fastapi",
+      "gemini",
+      "openai compatible",
+      "web app",
+      "deployment",
+      "user friendly",
+      "non technical users",
+      "mobile responsive",
+      "local storage",
+      "chat history",
+      "memory stack"
+    ],
+    "priority": 98,
+    "text": "For the 100x Stage 1 at-home assessment, I built a deployed web-app style AI twin / voice-chat bot that answers interview questions as me. The implementation is intentionally product-facing, not just a script: a Next.js frontend, FastAPI backend, LLM provider integration, curated profile knowledge base, lightweight RAG retrieval, voice input, markdown/math response rendering, responsive desktop/mobile UI, light/dark theme support, and local chat-history memory using localStorage because there is no login layer. The app is designed so a non-technical evaluator can open a URL and test it without installing code or manually entering an API key."
+  },
+  {
+    "id": "assessment_project_product_depth",
+    "title": "Product and UX depth in the AI twin project",
+    "tags": [
+      "100x",
+      "assessment",
+      "product",
+      "ux",
+      "user friendly",
+      "non technical",
+      "responsive",
+      "mobile",
+      "desktop",
+      "chat history",
+      "local memory",
+      "sidebar",
+      "settings",
+      "theme",
+      "model details",
+      "scroll behavior",
+      "voice input",
+      "shipping",
+      "iteration"
+    ],
+    "priority": 92,
+    "text": "The AI twin project was built with production-minded details that matter in an assessment: mobile-safe layout, responsive prompt chips, a clean sidebar for locally saved conversations, a settings menu with theme controls and model details, delete-all-memory behavior with confirmation, readable light/dark contrast, fixed chat-scroll behavior so users can read answers from the start, and UI changes driven by repeated testing. This is useful evidence for 100x because the role asks for people who ship customer-facing conversational improvements quickly, not just people who can call an LLM API once."
+  },
+  {
+    "id": "hundredx_role_fit",
+    "title": "100x role-fit narrative",
+    "tags": [
+      "100x",
+      "role fit",
+      "ai agent",
+      "ai agents",
+      "agent team",
+      "generative ai developer",
+      "ai engineer",
+      "owner",
+      "ownership",
+      "customer obsessed",
+      "shipping",
+      "weekly releases",
+      "production ready",
+      "memory stack",
+      "backend systems",
+      "conversations",
+      "sales",
+      "operations",
+      "autonomous",
+      "customer facing",
+      "founding team"
+    ],
+    "priority": 96,
+    "text": "My natural fit for 100x is not that I have already built a production sales closer agent; I should not overclaim that. The honest fit is that my background already combines the primitives 100x values: building AI systems that act, not just describe; shipping usable demos; handling context/memory; iterating on user-facing conversation quality; and taking ownership without waiting for perfect instructions. Nokia gave me experience with autonomous decision-making systems through a Deep RL agent for RRM beam selection. My thesis and Hermis work gave me experience with online decision systems, event logs, simulations, evaluation, and reliability. The 100x AI twin assessment demonstrates the LLM-agent side: RAG, voice/chat interface, local conversation memory, responsive product UX, and deployment-oriented engineering."
+  },
+  {
+    "id": "hundredx_agent_primitives",
+    "title": "Agent-building primitives relevant to 100x",
+    "tags": [
+      "100x",
+      "ai agent",
+      "agents",
+      "backend",
+      "memory",
+      "conversation",
+      "conversation memory",
+      "rag",
+      "logging",
+      "transcripts",
+      "autonomous",
+      "follow up",
+      "close",
+      "playbooks",
+      "sales playbook",
+      "operational role"
+    ],
+    "priority": 90,
+    "text": "For 100x-style agents, I can speak from adjacent but real experience. In this project, I built a retrieval-backed conversational system with local conversation memory. In Hermis, I built event-sourced simulation infrastructure where actions, fills, positions, NAV, and diagnostics are reconstructable from logs; that maps naturally to agent observability, transcripts, and compliance-style audit trails. In Nokia, I worked on policies that choose actions under constraints, evaluate generalizability across scenarios, and improve through fine-tuning. The missing piece is domain-specific sales/underwriting playbooks, which I would learn by translating human process into executable workflows rather than pretending I already know the domain."
+  },
+  {
+    "id": "hundredx_behavioral_fit",
+    "title": "100x behavioral fit: speed, ownership, and accountability",
+    "tags": [
+      "100x",
+      "behavioral",
+      "ownership",
+      "owner",
+      "accountability",
+      "fast learner",
+      "decide faster",
+      "shipping",
+      "feedback",
+      "customer obsession",
+      "remote",
+      "us hours",
+      "push boundaries"
+    ],
+    "priority": 88,
+    "text": "For behavioral questions aimed at 100x, my strongest evidence is ownership under ambiguity. In the Nokia internship, I did not only train a model; I tested multiple scenario changes, produced conclusive numerical findings, and identified where fine-tuning mattered and where it did not. In my thesis and Hermis work, I repeatedly debugged messy real-data issues instead of hiding behind clean demos. For this assessment, I turned a basic voicebot requirement into a more complete product: RAG, local memory, responsive UI, settings, theming, and mobile usability. My answer should be that I am strongest when the task is under-specified but the outcome is clear: ship something testable, measure what breaks, and improve it quickly."
   }
 ]

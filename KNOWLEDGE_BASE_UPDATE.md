@@ -15,3 +15,9 @@ Implemented after approval.
 - Runtime retrieval now uses tags, chunk priority, phrase boosts, and query expansion.
 - Stale embedding index content was replaced with metadata-only entries so old facts cannot leak through legacy files.
 - Pinned context now uses identity, current education/status, and answer policy, instead of the old missing `current_role` key.
+
+## 2026-05-31 profile update
+
+- Added explicit M.Tech supervisor / guide: Dr. Samrat Mukhopadhyay.
+- Added Nokia internship outcome details from evaluation notes: extensive generalizability simulations, scenario-wise fine-tuning conclusions, PER, projected action-space filtering, and planned SAMPO repository contribution.
+
