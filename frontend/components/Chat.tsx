@@ -699,12 +699,31 @@ export default function Chat() {
   const browserDoneRequestedRef = useRef(false);
   const voicePhaseRef = useRef<VoicePhase>("idle");
 
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const latestUserMessageRef = useRef<HTMLDivElement | null>(null);
+  const latestAssistantResponseRef = useRef<HTMLDivElement | null>(null);
+  const lastUserScrollIndexRef = useRef(-1);
+  const lastAssistantFocusIndexRef = useRef(-1);
   const composerFixedRef = useRef<HTMLDivElement | null>(null);
   const [composerHeight, setComposerHeight] = useState(184);
   const [keyboardInset, setKeyboardInset] = useState(0);
 
   const hasUserMessages = useMemo(() => messages.some((m) => m.role === "user"), [messages]);
+  const latestUserMessageIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === "user") return i;
+    }
+    return -1;
+  }, [messages]);
+  const latestAssistantResponseIndex = useMemo(() => {
+    if (latestUserMessageIndex < 0) return -1;
+
+    for (let i = messages.length - 1; i > latestUserMessageIndex; i -= 1) {
+      if (messages[i].role === "assistant") return i;
+    }
+
+    return -1;
+  }, [messages, latestUserMessageIndex]);
   const isVoiceActive = voicePhase !== "idle";
 
   useEffect(() => {
@@ -749,8 +768,22 @@ export default function Chat() {
   }, [input]);
 
   useEffect(() => {
-    if (hasUserMessages) chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, busy, hasUserMessages]);
+    if (latestUserMessageIndex < 0 || lastUserScrollIndexRef.current === latestUserMessageIndex) return;
+
+    lastUserScrollIndexRef.current = latestUserMessageIndex;
+    window.requestAnimationFrame(() => {
+      scrollChatElementTo(latestUserMessageRef.current, 8);
+    });
+  }, [latestUserMessageIndex]);
+
+  useEffect(() => {
+    if (busy || latestAssistantResponseIndex < 0 || lastAssistantFocusIndexRef.current === latestAssistantResponseIndex) return;
+
+    lastAssistantFocusIndexRef.current = latestAssistantResponseIndex;
+    window.requestAnimationFrame(() => {
+      scrollChatElementTo(latestAssistantResponseRef.current, assistantLeadInOffset());
+    });
+  }, [busy, latestAssistantResponseIndex]);
 
   useEffect(() => {
     if (!hasUserMessages) return;
@@ -821,6 +854,35 @@ export default function Chat() {
   useEffect(() => {
     return () => cleanupRecordingResources();
   }, []);
+
+  function scrollChatElementTo(element: HTMLElement | null, offsetPx = 0) {
+    if (!element) return;
+
+    const scroller = chatScrollRef.current;
+    if (!scroller) {
+      element.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const targetTop = scroller.scrollTop + elementRect.top - scrollerRect.top - offsetPx;
+    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+
+    scroller.scrollTo({
+      top: Math.min(maxScrollTop, Math.max(0, targetTop)),
+      behavior: "smooth",
+    });
+  }
+
+  function assistantLeadInOffset() {
+    const userBubble = latestUserMessageRef.current;
+    const fallback = window.matchMedia("(max-width: 720px)").matches ? 52 : 68;
+    if (!userBubble) return fallback;
+
+    const userHeight = userBubble.getBoundingClientRect().height;
+    return Math.round(Math.max(44, Math.min(88, userHeight * 0.55)));
+  }
 
   function focusPrompt() {
     inputRef.current?.focus();
@@ -948,16 +1010,6 @@ export default function Chat() {
     setMessages([makeMsg("assistant", "Fresh slate. Hit me with your best interview question.")]);
     setDebug(null);
     setDebugOpen(false);
-  }
-
-  function exportJSON() {
-    const blob = new Blob([JSON.stringify(messages, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "chat.json";
-    a.click();
-    URL.revokeObjectURL(url);
   }
 
   function fillPrompt(text: string) {
@@ -1750,9 +1802,6 @@ export default function Chat() {
             <button onClick={newChat} className="ghost-btn" type="button">
               New chat
             </button>
-            <button onClick={exportJSON} className="ghost-btn" type="button">
-              Export
-            </button>
             <button onClick={() => setDebugOpen((v) => !v)} className="ghost-btn debug-toggle" type="button">
               Model details
             </button>
@@ -1760,13 +1809,24 @@ export default function Chat() {
 
           {debugOpen ? renderDebugPanel() : null}
 
-          <div className="chat-scroll-outer">
+          <div className="chat-scroll-outer" ref={chatScrollRef}>
             <div className="chat-scroll-inner">
               <div className="chat">
                 {messages.map((m, idx) => {
                   const isPending = busy && idx === messages.length - 1 && m.role === "user";
                   return (
-                    <div key={`${m.ts}-${idx}`} className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`} style={{ "--bubble-index": idx } as React.CSSProperties}>
+                    <div
+                      key={`${m.ts}-${idx}`}
+                      ref={
+                        idx === latestUserMessageIndex
+                          ? latestUserMessageRef
+                          : idx === latestAssistantResponseIndex
+                            ? latestAssistantResponseRef
+                            : undefined
+                      }
+                      className={`bubble ${m.role === "user" ? "user" : "ai"} ${isPending ? "pending" : ""}`}
+                      style={{ "--bubble-index": idx } as React.CSSProperties}
+                    >
                       <MessageContent role={m.role} content={m.content} ts={m.ts} />
                       <div className="meta">{m.ts}</div>
                     </div>
@@ -1787,7 +1847,6 @@ export default function Chat() {
                 ) : null}
 
                 <div className="chat-bottom-spacer" aria-hidden="true" />
-                <div ref={chatEndRef} />
               </div>
             </div>
           </div>
