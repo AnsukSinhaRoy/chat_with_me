@@ -168,6 +168,68 @@ const GREEK_SYMBOLS: Record<string, string> = {
   Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
 };
 
+const LATEX_SYMBOL_COMMANDS: Record<string, string> = {
+  cdot: "·",
+  times: "×",
+  le: "≤",
+  leq: "≤",
+  leqslant: "≤",
+  ge: "≥",
+  geq: "≥",
+  geqslant: "≥",
+  neq: "≠",
+  ne: "≠",
+  approx: "≈",
+  sim: "∼",
+  equiv: "≡",
+  // In this app the model mostly uses \succeq for portfolio-vector
+  // non-negativity. Rendering it as ≥ is clearer than the formal partial-order
+  // glyph for non-technical readers.
+  succeq: "≥",
+  preceq: "≤",
+  succ: ">",
+  prec: "<",
+  infty: "∞",
+  sum: "∑",
+  prod: "∏",
+  min: "min",
+  max: "max",
+  argmin: "argmin",
+  argmax: "argmax",
+  to: "→",
+  mapsto: "↦",
+  implies: "⇒",
+  Rightarrow: "⇒",
+  leftarrow: "←",
+  Leftarrow: "⇐",
+  iff: "⇔",
+  Leftrightarrow: "⇔",
+  in: "∈",
+  notin: "∉",
+  subset: "⊂",
+  subseteq: "⊆",
+  superset: "⊃",
+  superseteq: "⊇",
+  cap: "∩",
+  cup: "∪",
+  emptyset: "∅",
+  forall: "∀",
+  exists: "∃",
+  nabla: "∇",
+  partial: "∂",
+  top: "ᵀ",
+  transpose: "ᵀ",
+  lVert: "‖",
+  rVert: "‖",
+  Vert: "‖",
+  vert: "|",
+  lbrace: "{",
+  rbrace: "}",
+  ell: "ℓ",
+  ldots: "…",
+  cdots: "⋯",
+};
+
 function toScript(value: string, table: Record<string, string>) {
   return value.split("").map((ch) => table[ch] || ch).join("");
 }
@@ -265,6 +327,20 @@ function normalizeLatexExpression(source: string): string {
       continue;
     }
 
+    const bareSymbolCommand = Object.keys(LATEX_SYMBOL_COMMANDS)
+      .sort((a, b) => b.length - a.length)
+      .find((name) => {
+        if (!source.startsWith(name, i)) return false;
+        const before = i === 0 ? "" : source[i - 1];
+        const after = source[i + name.length] || "";
+        return !/[A-Za-z]/.test(before) && !/[A-Za-z]/.test(after);
+      });
+    if (bareSymbolCommand) {
+      output += LATEX_SYMBOL_COMMANDS[bareSymbolCommand];
+      i += bareSymbolCommand.length;
+      continue;
+    }
+
     const bareGreekName = Object.keys(GREEK_SYMBOLS)
       .sort((a, b) => b.length - a.length)
       .find((name) => {
@@ -346,25 +422,7 @@ function normalizeLatexExpression(source: string): string {
         continue;
       }
 
-      const commandMap: Record<string, string> = {
-        cdot: "·",
-        times: "×",
-        leq: "≤",
-        geq: "≥",
-        neq: "≠",
-        approx: "≈",
-        infty: "∞",
-        sum: "∑",
-        prod: "∏",
-        min: "min",
-        max: "max",
-        to: "→",
-        mapsto: "↦",
-        ell: "ℓ",
-        ldots: "…",
-        cdots: "⋯",
-      };
-      output += commandMap[command] || command;
+      output += LATEX_SYMBOL_COMMANDS[command] || command;
       continue;
     }
 
